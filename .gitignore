@@ -1,0 +1,14 @@
+# Credentials — never commit
+.env
+.env.*
+
+# Build artifacts
+/ptv
+*.exe
+
+# Local data / databases
+*.sqlite
+*.sqlite-*
+
+# GoReleaser output
+/dist/
