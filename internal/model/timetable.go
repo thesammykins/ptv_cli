@@ -87,6 +87,36 @@ type DisruptionNote struct {
 	URL    string `json:"url,omitempty"`
 }
 
+// BuildStopModes populates each stop's Mode field by examining the routes
+// that serve it through the connection graph. A stop's mode is the "most
+// major" route type (lowest feed_mode value) among routes that visit it,
+// so Train (2) beats Tram (3) beats Bus (4), and V/Line (1) beats all.
+func (tt *Timetable) BuildStopModes() {
+	initial := make([]int, len(tt.Stops))
+	for i := range tt.Stops {
+		initial[i] = tt.Stops[i].Mode
+	}
+	for _, c := range tt.Connections {
+		if c.RouteIdx >= 0 && c.RouteIdx < len(tt.Routes) {
+			mode := tt.Routes[c.RouteIdx].RouteType
+			if mode > 0 {
+				if tt.Stops[c.DepStop].Mode <= 0 || mode < tt.Stops[c.DepStop].Mode {
+					tt.Stops[c.DepStop].Mode = mode
+				}
+				if tt.Stops[c.ArrStop].Mode <= 0 || mode < tt.Stops[c.ArrStop].Mode {
+					tt.Stops[c.ArrStop].Mode = mode
+				}
+			}
+		}
+	}
+	// Preserve feed-mode prefix for stops without any route association.
+	for i := range tt.Stops {
+		if tt.Stops[i].Mode < 0 {
+			tt.Stops[i].Mode = initial[i]
+		}
+	}
+}
+
 // Journey is a planned itinerary.
 type Journey struct {
 	Legs        []Leg            `json:"legs"`

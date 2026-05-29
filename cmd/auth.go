@@ -84,9 +84,19 @@ var authStatusCmd = &cobra.Command{
 			if !errors.Is(err, config.ErrMissingCredentials) {
 				return err
 			}
+			if flagJSON {
+				return printJSON(map[string]any{"configured": false})
+			}
 			fmt.Println("No credentials configured.")
 			fmt.Println("Run 'ptv auth login' to store them securely.")
 			return nil
+		}
+		if flagJSON {
+			return printJSON(map[string]any{
+				"configured": true,
+				"source":     cfg.CredentialSource,
+				"dev_id":     cfg.DevID,
+			})
 		}
 		fmt.Printf("Credentials configured (source: %s)\n", render.CleanText(string(cfg.CredentialSource)))
 		fmt.Printf("User/Developer ID: %s\n", render.CleanText(cfg.DevID))

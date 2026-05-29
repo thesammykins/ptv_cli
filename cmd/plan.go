@@ -184,10 +184,6 @@ func resolvePlanStops(ctx context.Context, tt *model.Timetable, query string, ra
 		return idxs, "", nil
 	}
 
-	// Tiered name matching: prefer prefix matches, then substring matches.
-	// All stop names in a tier are unioned so multi-platform / multi-modal
-	// interchanges (e.g. a station's train, tram and bus stops) are all valid
-	// journey endpoints.
 	var prefix, contains []int
 	for name, idxs := range tt.NameIndex {
 		switch {
@@ -198,14 +194,18 @@ func resolvePlanStops(ctx context.Context, tt *model.Timetable, query string, ra
 		}
 	}
 	if len(prefix) > 0 {
+		if majors := filterMajorStops(tt.Stops, prefix); len(majors) > 0 {
+			return majors, "", nil
+		}
 		return prefix, "", nil
 	}
 	if len(contains) > 0 {
+		if majors := filterMajorStops(tt.Stops, contains); len(majors) > 0 {
+			return majors, "", nil
+		}
 		return contains, "", nil
 	}
 
-	// Fall back to geocoding the free-text query to a coordinate, then use the
-	// nearest stops to it.
 	if geo != nil {
 		place, err := geo.Lookup(ctx, query)
 		if err != nil {
@@ -215,10 +215,81 @@ func resolvePlanStops(ctx context.Context, tt *model.Timetable, query string, ra
 		if len(idxs) == 0 {
 			return nil, "", fmt.Errorf("found %q at %.5f,%.5f but no stops within %.0fm", place.DisplayName, place.Lat, place.Lon, radiusM)
 		}
+		if isStreetResult(place.DisplayName) && !isStreetQuery(query) {
+			stations := stopsWithinRadius(tt, place.Lat, place.Lon, 2000)
+			if majors := filterNamedMajorStops(tt.Stops, stations, lower); len(majors) > 0 {
+				return majors, place.DisplayName, nil
+			}
+		}
 		return idxs, place.DisplayName, nil
 	}
 
 	return nil, "", fmt.Errorf("no stop matching %q (try a different name, a lat,lng, or drop --no-geocode)", query)
+}
+
+// isRailMode returns true for feed modes that represent rail-based transport
+// (V/Line Train mode 1 and Metro Train mode 2).
+func isRailMode(mode int) bool {
+	return mode == 1 || mode == 2
+}
+
+// filterMajorStops filters a set of stop indexes to only those served by
+// rail-based transport (V/Line or Metro Train). These are what users
+// typically intend when providing a place name like "Geelong".
+func filterMajorStops(stops []model.Stop, idxs []int) []int {
+	var out []int
+	for _, i := range idxs {
+		if i >= 0 && i < len(stops) && isRailMode(stops[i].Mode) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// filterNamedMajorStops filters a set of stop indexes to rail stops whose
+// name contains the query as a substring.
+func filterNamedMajorStops(stops []model.Stop, idxs []int, query string) []int {
+	var out []int
+	for _, i := range idxs {
+		if i >= 0 && i < len(stops) {
+			name := strings.ToLower(stops[i].Name)
+			if isRailMode(stops[i].Mode) && strings.Contains(name, query) {
+				out = append(out, i)
+			}
+		}
+	}
+	return out
+}
+
+// isStreetResult checks whether a Nominatim display_name looks like a street
+// or road rather than a city/town/station.
+func isStreetResult(displayName string) bool {
+	suffixes := []string{" rd", " road", " st", " street", " ave", " avenue",
+		" dr", " drive", " cres", " crescent", " gr", " grove",
+		" cl", " close", " pl", " place", " ln", " lane", " hwy", " highway",
+		" way", " court", " circuit", " boulevard", " parade", " pde"}
+	lower := strings.ToLower(displayName)
+	for _, s := range suffixes {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// isStreetQuery checks whether the user's query contains street-like suffixes,
+// indicating they specifically intend a street address rather than a place.
+func isStreetQuery(query string) bool {
+	suffixes := []string{" rd", " road", " st", " street", " ave", " avenue",
+		" dr", " drive", " cres", " crescent", " ln", " lane", " hwy", " highway",
+		" pde", " parade", " way", " court", " circuit", " boulevard"}
+	lower := strings.ToLower(query)
+	for _, s := range suffixes {
+		if strings.HasSuffix(lower, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // stopsWithinRadius returns stop indexes within radiusM metres of a point.
@@ -378,7 +449,7 @@ func init() {
 	planCmd.Flags().StringVar(&planDepart, "depart", "", "depart at this time (HH:MM or 'YYYY-MM-DD HH:MM'); default now")
 	planCmd.Flags().StringVar(&planArriveBy, "arrive-by", "", "arrive no later than this time (HH:MM or 'YYYY-MM-DD HH:MM')")
 	planCmd.Flags().StringVar(&planDate, "date", "", "service date for HH:MM times (YYYY-MM-DD); default today")
-	planCmd.Flags().Float64Var(&planRadius, "radius", 800, "search radius in metres for a lat,lng or geocoded place")
+	planCmd.Flags().Float64Var(&planRadius, "radius", 1000, "search radius in metres for a lat,lng or geocoded place")
 	planCmd.Flags().BoolVar(&planNoGeocode, "no-geocode", false, "disable place/address geocoding (match local stop names only)")
 	planCmd.Flags().BoolVar(&planNoDisruptions, "no-disruptions", false, "skip the real-time disruptions overlay")
 	planCmd.Flags().BoolVar(&planNoUpdateCheck, "no-update-check", false, "skip the GTFS staleness / upstream-update check")

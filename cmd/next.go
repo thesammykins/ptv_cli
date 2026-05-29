@@ -78,6 +78,8 @@ scheduled vs estimated times, platform numbers and any disruptions.`,
 		stopName := stop.StopName
 		if s, ok := resp.Stops[strconv.Itoa(stop.StopID)]; ok && s.StopName != "" {
 			stopName = s.StopName
+		} else if stopName == "" {
+			stopName = fmt.Sprintf("Stop %d", stop.StopID)
 		}
 		fmt.Printf("Next departures — %s (%s)\n\n", render.CleanText(stopName), routeTypeName(stop.RouteType))
 

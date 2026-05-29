@@ -107,12 +107,26 @@ func resolveStop(client *ptvapi.Client, query string, modeHint []int) (*ptvapi.S
 	if len(resp.Stops) == 0 {
 		return nil, fmt.Errorf("no stop matching %q", query)
 	}
-	for i := range resp.Stops {
-		if strings.EqualFold(resp.Stops[i].StopName, query) {
-			return &resp.Stops[i], nil
+	return chooseStop(query, resp.Stops), nil
+}
+
+func chooseStop(query string, stops []ptvapi.StopModel) *ptvapi.StopModel {
+	query = strings.TrimSpace(query)
+	for i := range stops {
+		if strings.EqualFold(stops[i].StopName, query) {
+			return &stops[i]
 		}
 	}
-	return &resp.Stops[0], nil
+	stationName := query
+	if !strings.Contains(strings.ToLower(stationName), "station") {
+		stationName += " Station"
+	}
+	for i := range stops {
+		if strings.EqualFold(stops[i].StopName, stationName) {
+			return &stops[i]
+		}
+	}
+	return &stops[0]
 }
 
 func resolveStationStop(client *ptvapi.Client, query string, modeHint []int) (*ptvapi.StopModel, error) {

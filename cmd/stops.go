@@ -24,7 +24,11 @@ var stopsCmd = &cobra.Command{
 var stopsNearCmd = &cobra.Command{
 	Use:   "near <lat,lng|place>",
 	Short: "List stops near coordinates, a place or an address",
-	Args:  cobra.ExactArgs(1),
+	Long: `List stops near coordinates, a place or an address.
+
+Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
+'--' separator so it is not mistaken for a flag. Put any flags before '--'.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, cfg, err := loadClient()
 		if err != nil {
@@ -42,7 +46,7 @@ var stopsNearCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		resp, err := client.StopsNearLocation(ctx(), lat, lng, routeTypes, flagLimit, stopsMaxDistance)
+		resp, err := client.StopsNearLocation(ctx(), lat, lng, routeTypes, flagLimit, stopsNearDistance())
 		if err != nil {
 			return err
 		}
@@ -87,6 +91,7 @@ var stopsOnCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		resp.Stops = limitStops(resp.Stops)
 		if flagJSON {
 			return printJSON(resp)
 		}
@@ -120,9 +125,16 @@ func parseLatLng(s string) (float64, float64, error) {
 	return lat, lng, nil
 }
 
+func stopsNearDistance() float64 {
+	if stopsMaxDistance > 0 {
+		return stopsMaxDistance
+	}
+	return 1000
+}
+
 func init() {
 	stopsNearCmd.Flags().StringSliceVar(&stopsModes, "mode", nil, "filter by mode(s)")
-	stopsNearCmd.Flags().Float64Var(&stopsMaxDistance, "max-distance", 0, "max distance in metres (default 300)")
+	stopsNearCmd.Flags().Float64Var(&stopsMaxDistance, "max-distance", 0, "max distance in metres (default 1000)")
 	stopsOnCmd.Flags().StringSliceVar(&stopsOnModes, "mode", nil, "filter by mode(s)")
 	stopsCmd.AddCommand(stopsNearCmd, stopsOnCmd)
 	rootCmd.AddCommand(stopsCmd)

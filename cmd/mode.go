@@ -133,6 +133,7 @@ func runModeShow(client *ptvapi.Client, routeType int, query string) error {
 			return serr
 		}
 		sortStopsBySequence(stops.Stops)
+		stops.Stops = limitStops(stops.Stops)
 		fmt.Printf("Stops (towards %s)\n", render.CleanText(dirs.Directions[0].DirectionName))
 		st := render.NewTable("SEQ", "ID", "STOP", "SUBURB")
 		for _, s := range stops.Stops {
@@ -211,6 +212,8 @@ func runModeNext(client *ptvapi.Client, routeType int, query string) error {
 	stopName := stop.StopName
 	if s, ok := resp.Stops[strconv.Itoa(stop.StopID)]; ok && s.StopName != "" {
 		stopName = s.StopName
+	} else if stopName == "" {
+		stopName = fmt.Sprintf("Stop %d", stop.StopID)
 	}
 	fmt.Printf("Next departures — %s (%s)\n\n", render.CleanText(stopName), routeTypeName(routeType))
 

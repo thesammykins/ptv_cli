@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 	"github.com/thesammykins/ptv_cli/internal/render"
 )
 
@@ -65,7 +66,7 @@ var stationCmd = &cobra.Command{
 		if len(d.Routes) > 0 {
 			fmt.Println("\nRoutes serving this stop")
 			t := render.NewTable("ID", "NUMBER", "NAME", "MODE")
-			for _, r := range d.Routes {
+			for _, r := range deduplicateRoutes(d.Routes) {
 				t.Row(r.RouteID, r.RouteNumber, r.RouteName, routeTypeName(r.RouteType))
 			}
 			if err := t.Flush(); err != nil {
@@ -74,6 +75,22 @@ var stationCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+// deduplicateRoutes removes duplicate routes by route_id, keeping the first
+// occurrence. The PTV API sometimes returns the same route entry twice (once
+// per direction) for stations served by multiple V/Line routes.
+func deduplicateRoutes(routes []ptvapi.Route) []ptvapi.Route {
+	seen := make(map[int]bool, len(routes))
+	out := make([]ptvapi.Route, 0, len(routes))
+	for _, r := range routes {
+		if seen[r.RouteID] {
+			continue
+		}
+		seen[r.RouteID] = true
+		out = append(out, r)
+	}
+	return out
 }
 
 func init() {

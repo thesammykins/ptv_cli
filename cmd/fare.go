@@ -24,6 +24,9 @@ var fareCmd = &cobra.Command{
 		if fareMinZone <= 0 || fareMaxZone <= 0 {
 			return fmt.Errorf("provide --min-zone and --max-zone (e.g. --min-zone 1 --max-zone 2)")
 		}
+		if fareMinZone > fareMaxZone {
+			return fmt.Errorf("--min-zone must be less than or equal to --max-zone")
+		}
 		resp, err := client.FareEstimate(ctx(), fareMinZone, fareMaxZone)
 		if err != nil {
 			return err

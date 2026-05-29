@@ -118,6 +118,7 @@ func runLineShow(client *ptvapi.Client, query string, routeTypes []int) error {
 			return err
 		}
 		sortStopsBySequence(stops.Stops)
+		stops.Stops = limitStops(stops.Stops)
 		fmt.Printf("Stops (towards %s)\n", render.CleanText(dirs.Directions[0].DirectionName))
 		st := render.NewTable("SEQ", "ID", "STOP", "SUBURB")
 		for _, s := range stops.Stops {

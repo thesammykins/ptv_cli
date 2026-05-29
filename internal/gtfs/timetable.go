@@ -64,6 +64,7 @@ func (s *Store) LoadTimetable(day time.Time) (*model.Timetable, error) {
 	if err := s.loadFootpaths(tt, stopIdx); err != nil {
 		return nil, err
 	}
+	tt.BuildStopModes()
 	return tt, nil
 }
 
@@ -90,7 +91,7 @@ func (s *Store) loadStops(tt *model.Timetable) (map[string]int, error) {
 }
 
 func (s *Store) loadRoutes(tt *model.Timetable) (map[string]int, error) {
-	rows, err := s.db.Query(`SELECT route_id, route_short_name, route_long_name, feed_mode FROM routes`)
+	rows, err := s.db.Query(`SELECT route_id, route_short_name, route_long_name, route_type, feed_mode FROM routes`)
 	if err != nil {
 		return nil, err
 	}
@@ -98,14 +99,36 @@ func (s *Store) loadRoutes(tt *model.Timetable) (map[string]int, error) {
 	idx := map[string]int{}
 	for rows.Next() {
 		var id string
+		var routeType, feedMode int
 		var ri model.RouteInfo
-		if err := rows.Scan(&id, &ri.ShortName, &ri.LongName, &ri.RouteType); err != nil {
+		if err := rows.Scan(&id, &ri.ShortName, &ri.LongName, &routeType, &feedMode); err != nil {
 			return nil, err
 		}
+		ri.RouteType = modeFromRouteType(routeType, feedMode)
 		idx[id] = len(tt.Routes)
 		tt.Routes = append(tt.Routes, ri)
 	}
 	return idx, rows.Err()
+}
+
+func modeFromRouteType(routeType, feedMode int) int {
+	if feedMode > 0 {
+		return feedMode
+	}
+	switch routeType {
+	case 0, 900, 901, 902, 903, 904, 905, 906:
+		return 3
+	case 1, 400, 401, 402, 403, 404, 405:
+		return 2
+	case 2, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109:
+		return 1
+	case 3, 700, 701, 702, 703, 704, 705, 706, 707, 708, 709:
+		return 4
+	case 200, 201, 202, 203, 204:
+		return 5
+	default:
+		return feedMode
+	}
 }
 
 // feedModeFromID extracts the PTV GTFS feed mode (the numeric prefix before the

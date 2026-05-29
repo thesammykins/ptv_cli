@@ -26,6 +26,29 @@ func TestFeedModeFromID(t *testing.T) {
 	}
 }
 
+func TestModeFromRouteTypeFallsBackWhenFeedModeMissing(t *testing.T) {
+	cases := []struct {
+		name      string
+		routeType int
+		feedMode  int
+		want      int
+	}{
+		{name: "existing feed mode wins", routeType: 400, feedMode: 2, want: 2},
+		{name: "metro train", routeType: 400, feedMode: 0, want: 2},
+		{name: "tram", routeType: 0, feedMode: 0, want: 3},
+		{name: "bus", routeType: 701, feedMode: 0, want: 4},
+		{name: "vline train", routeType: 102, feedMode: 0, want: 1},
+		{name: "vline coach", routeType: 204, feedMode: 0, want: 5},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := modeFromRouteType(c.routeType, c.feedMode); got != c.want {
+				t.Fatalf("modeFromRouteType(%d, %d) = %d, want %d", c.routeType, c.feedMode, got, c.want)
+			}
+		})
+	}
+}
+
 func TestAppendConnectionsIncludesPreviousDayCrossMidnightSegment(t *testing.T) {
 	day := time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
 	tt := &model.Timetable{TripRoute: map[string]int{"trip": 0}}
