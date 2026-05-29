@@ -24,6 +24,9 @@ var linesCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if len(args) > 0 {
+			return runLineShow(client, joinArgs(args), routeTypes)
+		}
 		resp, err := client.Routes(ctx(), routeTypes, "")
 		if err != nil {
 			return err
@@ -60,61 +63,67 @@ var linesShowCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		route, err := resolveRoute(client, joinArgs(args))
+		routeTypes, err := modesToTypes(linesModes)
 		if err != nil {
 			return err
 		}
+		return runLineShow(client, joinArgs(args), routeTypes)
+	},
+}
 
-		dirs, err := client.Directions(ctx(), route.RouteID)
-		if err != nil {
-			return err
-		}
+func runLineShow(client *ptvapi.Client, query string, routeTypes []int) error {
+	route, err := resolveRouteWithTypes(client, query, routeTypes)
+	if err != nil {
+		return err
+	}
 
-		if flagJSON {
-			out := map[string]any{"route": route, "directions": dirs.Directions}
-			stopsByDir := map[string][]ptvapi.StopModel{}
-			for _, d := range dirs.Directions {
-				dID := d.DirectionID
-				s, err := client.StopsForRoute(ctx(), route.RouteID, route.RouteType, &dID)
-				if err != nil {
-					return err
-				}
-				stopsByDir[strconv.Itoa(d.DirectionID)] = s.Stops
-			}
-			out["stops"] = stopsByDir
-			return printJSON(out)
-		}
+	dirs, err := client.Directions(ctx(), route.RouteID)
+	if err != nil {
+		return err
+	}
 
-		fmt.Printf("%s — %s (%s)\n", route.RouteName, route.RouteNumber, routeTypeName(route.RouteType))
-		fmt.Printf("Route ID: %d\n\n", route.RouteID)
-
-		fmt.Println("Directions")
-		dt := render.NewTable("ID", "NAME")
+	if flagJSON {
+		out := map[string]any{"route": route, "directions": dirs.Directions}
+		stopsByDir := map[string][]ptvapi.StopModel{}
 		for _, d := range dirs.Directions {
-			dt.Row(d.DirectionID, d.DirectionName)
-		}
-		dt.Flush()
-		fmt.Println()
-
-		// Stops in the first direction give the line's stop order.
-		if len(dirs.Directions) > 0 {
-			dID := dirs.Directions[0].DirectionID
-			stops, err := client.StopsForRoute(ctx(), route.RouteID, route.RouteType, &dID)
+			dID := d.DirectionID
+			s, err := client.StopsForRoute(ctx(), route.RouteID, route.RouteType, &dID)
 			if err != nil {
 				return err
 			}
-			sort.Slice(stops.Stops, func(i, j int) bool {
-				return stops.Stops[i].StopSequence < stops.Stops[j].StopSequence
-			})
-			fmt.Printf("Stops (towards %s)\n", dirs.Directions[0].DirectionName)
-			st := render.NewTable("SEQ", "ID", "STOP", "SUBURB")
-			for _, s := range stops.Stops {
-				st.Row(s.StopSequence, s.StopID, s.StopName, s.StopSuburb)
-			}
-			st.Flush()
+			stopsByDir[strconv.Itoa(d.DirectionID)] = s.Stops
 		}
-		return nil
-	},
+		out["stops"] = stopsByDir
+		return printJSON(out)
+	}
+
+	fmt.Printf("%s — %s (%s)\n", route.RouteName, route.RouteNumber, routeTypeName(route.RouteType))
+	fmt.Printf("Route ID: %d\n\n", route.RouteID)
+
+	fmt.Println("Directions")
+	dt := render.NewTable("ID", "NAME")
+	for _, d := range dirs.Directions {
+		dt.Row(d.DirectionID, d.DirectionName)
+	}
+	dt.Flush()
+	fmt.Println()
+
+	// Stops in the first direction give the line's stop order.
+	if len(dirs.Directions) > 0 {
+		dID := dirs.Directions[0].DirectionID
+		stops, err := client.StopsForRoute(ctx(), route.RouteID, route.RouteType, &dID)
+		if err != nil {
+			return err
+		}
+		sortStopsBySequence(stops.Stops)
+		fmt.Printf("Stops (towards %s)\n", dirs.Directions[0].DirectionName)
+		st := render.NewTable("SEQ", "ID", "STOP", "SUBURB")
+		for _, s := range stops.Stops {
+			st.Row(s.StopSequence, s.StopID, s.StopName, s.StopSuburb)
+		}
+		st.Flush()
+	}
+	return nil
 }
 
 func init() {

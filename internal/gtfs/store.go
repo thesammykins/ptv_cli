@@ -3,6 +3,8 @@ package gtfs
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -16,6 +18,11 @@ type Store struct {
 
 // Open opens (and creates if needed) the GTFS database at path.
 func Open(path string) (*Store, error) {
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err

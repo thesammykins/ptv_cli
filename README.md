@@ -142,7 +142,7 @@ ptv tram lines               # list every tram route
 ptv tram next "Melbourne University"   # live departures from a stop (tram only)
 
 ptv bus 246
-ptv vline "Geelong"
+ptv vline 1745                # Geelong - Melbourne
 ```
 
 Each accepts `--json` for structured output.
@@ -182,6 +182,9 @@ so a station's train, tram and bus stops are all considered), a `lat,lng`
 coordinate, or a free-text **place / address** that is geocoded via
 OpenStreetMap Nominatim (biased to Victoria). Local stop-name matches take
 precedence; geocoding is the fallback. Use `--no-geocode` to disable it.
+
+`ptv stops near` also accepts either `lat,lng` coordinates or a place/address,
+for example `ptv stops near "36 McClelland Drive, Mill Park"`.
 
 ### Disruptions in `plan`
 

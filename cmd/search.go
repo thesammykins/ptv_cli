@@ -45,7 +45,11 @@ var searchCmd = &cobra.Command{
 		if len(resp.Routes) > 0 {
 			fmt.Println("Routes")
 			t := render.NewTable("ID", "NUMBER", "NAME", "MODE")
-			for _, r := range resp.Routes {
+			routes := resp.Routes
+			if flagLimit > 0 && len(routes) > flagLimit {
+				routes = routes[:flagLimit]
+			}
+			for _, r := range routes {
 				t.Row(r.RouteID, r.RouteNumber, r.RouteName, routeTypeName(r.RouteType))
 			}
 			t.Flush()
@@ -54,7 +58,7 @@ var searchCmd = &cobra.Command{
 		if len(resp.Outlets) > 0 {
 			fmt.Println("Outlets")
 			t := render.NewTable("NAME", "BUSINESS", "SUBURB")
-			for _, o := range resp.Outlets {
+			for _, o := range limitOutlets(resp.Outlets) {
 				t.Row(o.OutletName, o.OutletBusiness, o.OutletSuburb)
 			}
 			t.Flush()

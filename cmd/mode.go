@@ -128,9 +128,7 @@ func runModeShow(client *ptvapi.Client, routeType int, query string) error {
 		if serr != nil {
 			return serr
 		}
-		sort.Slice(stops.Stops, func(i, j int) bool {
-			return stops.Stops[i].StopSequence < stops.Stops[j].StopSequence
-		})
+		sortStopsBySequence(stops.Stops)
 		fmt.Printf("Stops (towards %s)\n", dirs.Directions[0].DirectionName)
 		st := render.NewTable("SEQ", "ID", "STOP", "SUBURB")
 		for _, s := range stops.Stops {
@@ -194,14 +192,15 @@ func runModeNext(client *ptvapi.Client, routeType int, query string) error {
 	if err != nil {
 		return err
 	}
-	if flagJSON {
-		return printJSON(resp)
-	}
-
 	deps := resp.Departures
 	sort.Slice(deps, func(i, j int) bool {
 		return departureSort(deps[i]) < departureSort(deps[j])
 	})
+	deps = limitDepartures(deps)
+	resp.Departures = deps
+	if flagJSON {
+		return printJSON(resp)
+	}
 
 	stopName := stop.StopName
 	if s, ok := resp.Stops[strconv.Itoa(stop.StopID)]; ok && s.StopName != "" {

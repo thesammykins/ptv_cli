@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
@@ -77,4 +78,62 @@ func limitStops(stops []ptvapi.StopModel) []ptvapi.StopModel {
 		return stops[:flagLimit]
 	}
 	return stops
+}
+
+func sortStopsBySequence(stops []ptvapi.StopModel) {
+	sort.Slice(stops, func(i, j int) bool {
+		a, b := stops[i].StopSequence, stops[j].StopSequence
+		if a == 0 && b != 0 {
+			return false
+		}
+		if a != 0 && b == 0 {
+			return true
+		}
+		if a != b {
+			return a < b
+		}
+		return stops[i].StopName < stops[j].StopName
+	})
+}
+
+func limitDepartures(deps []ptvapi.Departure) []ptvapi.Departure {
+	if flagLimit > 0 && len(deps) > flagLimit {
+		return deps[:flagLimit]
+	}
+	return deps
+}
+
+func limitOutlets(outlets []ptvapi.ResultOutlet) []ptvapi.ResultOutlet {
+	if flagLimit > 0 && len(outlets) > flagLimit {
+		return outlets[:flagLimit]
+	}
+	return outlets
+}
+
+func limitDisruptionMap(items map[string][]ptvapi.Disruption) map[string][]ptvapi.Disruption {
+	if flagLimit <= 0 {
+		return items
+	}
+	out := make(map[string][]ptvapi.Disruption, len(items))
+	remaining := flagLimit
+	modes := make([]string, 0, len(items))
+	for mode := range items {
+		modes = append(modes, mode)
+	}
+	sort.Strings(modes)
+	for _, mode := range modes {
+		list := items[mode]
+		if remaining <= 0 {
+			out[mode] = []ptvapi.Disruption{}
+			continue
+		}
+		if len(list) > remaining {
+			out[mode] = list[:remaining]
+			remaining = 0
+		} else {
+			out[mode] = list
+			remaining -= len(list)
+		}
+	}
+	return out
 }

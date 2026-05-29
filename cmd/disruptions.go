@@ -40,6 +40,7 @@ var disruptionsCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		resp.Disruptions = limitDisruptionMap(resp.Disruptions)
 		if flagJSON {
 			return printJSON(resp)
 		}

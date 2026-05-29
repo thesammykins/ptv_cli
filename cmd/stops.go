@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/geocode"
 	"github.com/thesammykins/ptv_cli/internal/render"
 )
 
@@ -21,17 +22,21 @@ var stopsCmd = &cobra.Command{
 }
 
 var stopsNearCmd = &cobra.Command{
-	Use:   "near <lat,lng>",
-	Short: "List stops near a latitude,longitude",
+	Use:   "near <lat,lng|place>",
+	Short: "List stops near coordinates, a place or an address",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, _, err := loadClient()
+		client, cfg, err := loadClient()
 		if err != nil {
 			return err
 		}
 		lat, lng, err := parseLatLng(args[0])
 		if err != nil {
-			return err
+			place, gerr := geocode.New(cfg.DataDir).Lookup(ctx(), args[0])
+			if gerr != nil {
+				return fmt.Errorf("expected lat,lng or geocodable place: %w", gerr)
+			}
+			lat, lng = place.Lat, place.Lon
 		}
 		routeTypes, err := modesToTypes(stopsModes)
 		if err != nil {
@@ -67,7 +72,11 @@ var stopsOnCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		route, err := resolveRoute(client, joinArgs(args))
+		routeTypes, err := modesToTypes(stopsOnModes)
+		if err != nil {
+			return err
+		}
+		route, err := resolveRouteWithTypes(client, joinArgs(args), routeTypes)
 		if err != nil {
 			return err
 		}
@@ -78,9 +87,7 @@ var stopsOnCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(resp)
 		}
-		sort.Slice(resp.Stops, func(i, j int) bool {
-			return resp.Stops[i].StopName < resp.Stops[j].StopName
-		})
+		sortStopsBySequence(resp.Stops)
 		fmt.Printf("Stops on %s (%s)\n", route.RouteName, routeTypeName(route.RouteType))
 		t := render.NewTable("ID", "STOP", "SUBURB")
 		for _, s := range resp.Stops {

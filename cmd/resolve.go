@@ -8,41 +8,80 @@ import (
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 )
 
-// resolveRoute resolves a route from a numeric id or a (partial) name.
+// resolveRoute resolves a route from a numeric id, public route number, or name.
 func resolveRoute(client *ptvapi.Client, query string) (*ptvapi.Route, error) {
-	query = strings.TrimSpace(query)
-	if id, err := strconv.Atoi(query); err == nil {
-		resp, err := client.Route(ctx(), id)
-		if err != nil {
-			return nil, err
-		}
-		if resp.Route == nil {
-			return nil, fmt.Errorf("no route with id %d", id)
-		}
-		return resp.Route, nil
-	}
+	return resolveRouteWithTypes(client, query, nil)
+}
 
-	resp, err := client.Routes(ctx(), nil, query)
+func resolveRouteWithTypes(client *ptvapi.Client, query string, routeTypes []int) (*ptvapi.Route, error) {
+	query = strings.TrimSpace(query)
+
+	nameFilter := ""
+	resp, err := client.Routes(ctx(), routeTypes, nameFilter)
 	if err != nil {
 		return nil, err
 	}
+	routes := resp.Routes
+
+	// Human-facing route numbers are more useful than API route IDs when a mode
+	// hint is present, e.g. tram 109 is route ID 722.
+	if len(routeTypes) > 0 {
+		for i := range routes {
+			if strings.EqualFold(routes[i].RouteNumber, query) {
+				return &routes[i], nil
+			}
+		}
+	}
+
+	if id, err := strconv.Atoi(query); err == nil {
+		for i := range routes {
+			if routes[i].RouteID == id {
+				return &routes[i], nil
+			}
+		}
+		if len(routeTypes) == 0 {
+			resp, err := client.Route(ctx(), id)
+			if err != nil {
+				return nil, err
+			}
+			if resp.Route != nil {
+				return resp.Route, nil
+			}
+		}
+	}
+
 	if len(resp.Routes) == 0 {
 		return nil, fmt.Errorf("no route matching %q", query)
 	}
 	// Prefer an exact (case-insensitive) name match.
-	for i := range resp.Routes {
-		if strings.EqualFold(resp.Routes[i].RouteName, query) {
-			return &resp.Routes[i], nil
+	for i := range routes {
+		if strings.EqualFold(routes[i].RouteName, query) {
+			return &routes[i], nil
 		}
 	}
-	if len(resp.Routes) > 1 {
+	var contains []ptvapi.Route
+	lower := strings.ToLower(query)
+	for _, r := range routes {
+		if strings.Contains(strings.ToLower(r.RouteName), lower) || strings.Contains(strings.ToLower(r.RouteNumber), lower) {
+			contains = append(contains, r)
+		}
+	}
+	if len(contains) == 0 {
+		return nil, fmt.Errorf("no route matching %q", query)
+	}
+	routes = contains
+	if len(routes) > 1 {
 		var names []string
-		for _, r := range resp.Routes {
-			names = append(names, fmt.Sprintf("%s (%d)", r.RouteName, r.RouteID))
+		for _, r := range routes {
+			label := r.RouteName
+			if r.RouteNumber != "" {
+				label = r.RouteNumber + " " + label
+			}
+			names = append(names, fmt.Sprintf("%s (%d)", label, r.RouteID))
 		}
 		return nil, fmt.Errorf("%q is ambiguous; matches: %s", query, strings.Join(names, ", "))
 	}
-	return &resp.Routes[0], nil
+	return &routes[0], nil
 }
 
 // resolveStop resolves a stop from a numeric id, or a (partial) name via
@@ -70,6 +109,42 @@ func resolveStop(client *ptvapi.Client, query string, modeHint []int) (*ptvapi.S
 	}
 	for i := range resp.Stops {
 		if strings.EqualFold(resp.Stops[i].StopName, query) {
+			return &resp.Stops[i], nil
+		}
+	}
+	return &resp.Stops[0], nil
+}
+
+func resolveStationStop(client *ptvapi.Client, query string, modeHint []int) (*ptvapi.StopModel, error) {
+	if len(modeHint) == 0 {
+		modeHint = []int{0}
+	}
+	stop, err := resolveStop(client, query, modeHint)
+	if err == nil && stop.StopName != "" {
+		return stop, nil
+	}
+	query = strings.TrimSpace(query)
+	resp, err := client.Search(ctx(), query, modeHint)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Stops) == 0 {
+		if stop != nil {
+			return stop, nil
+		}
+		return nil, fmt.Errorf("no station matching %q", query)
+	}
+	stationName := query
+	if !strings.Contains(strings.ToLower(stationName), "station") {
+		stationName += " Station"
+	}
+	for i := range resp.Stops {
+		if strings.EqualFold(resp.Stops[i].StopName, stationName) {
+			return &resp.Stops[i], nil
+		}
+	}
+	for i := range resp.Stops {
+		if strings.Contains(strings.ToLower(resp.Stops[i].StopName), " station") {
 			return &resp.Stops[i], nil
 		}
 	}

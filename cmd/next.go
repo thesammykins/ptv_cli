@@ -51,7 +51,7 @@ scheduled vs estimated times, platform numbers and any disruptions.`,
 			Expand:     []string{ptvapi.ExpandRoute, ptvapi.ExpandRun, ptvapi.ExpandDirection, ptvapi.ExpandDisruption},
 		}
 		if nextRoute != "" {
-			route, rerr := resolveRoute(client, nextRoute)
+			route, rerr := resolveRouteWithTypes(client, nextRoute, modeHint)
 			if rerr != nil {
 				return rerr
 			}
@@ -62,10 +62,6 @@ scheduled vs estimated times, platform numbers and any disruptions.`,
 		if err != nil {
 			return err
 		}
-		if flagJSON {
-			return printJSON(resp)
-		}
-
 		deps := resp.Departures
 		if nextPlatform != "" {
 			deps = filterPlatform(deps, nextPlatform)
@@ -73,6 +69,11 @@ scheduled vs estimated times, platform numbers and any disruptions.`,
 		sort.Slice(deps, func(i, j int) bool {
 			return departureSort(deps[i]) < departureSort(deps[j])
 		})
+		deps = limitDepartures(deps)
+		resp.Departures = deps
+		if flagJSON {
+			return printJSON(resp)
+		}
 
 		stopName := stop.StopName
 		if s, ok := resp.Stops[strconv.Itoa(stop.StopID)]; ok && s.StopName != "" {

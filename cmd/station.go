@@ -29,7 +29,7 @@ var stationCmd = &cobra.Command{
 			modeHint = []int{rt}
 		}
 
-		stop, err := resolveStop(client, joinArgs(args), modeHint)
+		stop, err := resolveStationStop(client, joinArgs(args), modeHint)
 		if err != nil {
 			return err
 		}
