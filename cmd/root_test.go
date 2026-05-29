@@ -30,6 +30,7 @@ func executeCommand(t *testing.T, args ...string) (string, string, error) {
 	rootCmd.SetErr(errW)
 	flagJSON = false
 	flagLimit = 0
+	flagEnv = ""
 
 	execErr := rootCmd.Execute()
 
@@ -90,6 +91,27 @@ func TestGTFSStatusJSONNotIngested(t *testing.T) {
 	}
 	if !strings.HasSuffix(got.Database, "gtfs.sqlite") {
 		t.Fatalf("database = %q, want gtfs.sqlite path", got.Database)
+	}
+}
+
+func TestGTFSUpdateRejectsUnexpectedArgs(t *testing.T) {
+	stdout, stderr, err := executeCommand(t, "gtfs", "update", "unexpected")
+	if err == nil {
+		t.Fatal("expected unexpected arg error")
+	}
+	if stdout != "" || stderr != "" {
+		t.Fatalf("stdout=%q stderr=%q, want no direct output from Execute", stdout, stderr)
+	}
+}
+
+func TestAuthStatusPropagatesInvalidConfig(t *testing.T) {
+	t.Setenv("PTV_BASE_URL", "http://example.com")
+	stdout, stderr, err := executeCommand(t, "auth", "status")
+	if err == nil {
+		t.Fatal("expected invalid config error")
+	}
+	if stdout != "" || stderr != "" {
+		t.Fatalf("stdout=%q stderr=%q, want no direct output from Execute", stdout, stderr)
 	}
 }
 

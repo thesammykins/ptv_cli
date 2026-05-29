@@ -9,7 +9,7 @@ Use this skill when interacting with the production `ptv` CLI. Assume the user h
 
 ## Core Rules
 
-- Do not read or print secrets. Let credentials resolve normally from env, OS keyring, or `.env` via `config.Load()`.
+- Do not read or print secrets. Let credentials resolve normally from env or OS keyring. Use `--env-file` only when explicitly requested.
 - Keep JSON stdout clean. If testing `--json`, parse stdout and treat stderr warnings separately.
 - Use human-logical inputs first: public route numbers, route names, station names, and addresses. Use API IDs only to disambiguate.
 - For negative Melbourne latitudes on the command line, put coordinates after `--`.

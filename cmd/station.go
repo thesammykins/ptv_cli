@@ -50,13 +50,13 @@ var stationCmd = &cobra.Command{
 		if name == "" {
 			name = stop.StopName
 		}
-		fmt.Printf("%s\n", name)
+		fmt.Printf("%s\n", render.CleanText(name))
 		fmt.Printf("Stop ID: %d   Mode: %s\n", stop.StopID, routeTypeName(stop.RouteType))
 		if d.StationType != "" {
-			fmt.Printf("Type: %s\n", d.StationType)
+			fmt.Printf("Type: %s\n", render.CleanText(d.StationType))
 		}
 		if d.StationDescription != "" {
-			fmt.Printf("%s\n", d.StationDescription)
+			fmt.Printf("%s\n", render.CleanText(d.StationDescription))
 		}
 		if d.StopLatitude != 0 || d.StopLongitude != 0 {
 			fmt.Printf("Location: %.5f, %.5f\n", d.StopLatitude, d.StopLongitude)
@@ -68,7 +68,9 @@ var stationCmd = &cobra.Command{
 			for _, r := range d.Routes {
 				t.Row(r.RouteID, r.RouteNumber, r.RouteName, routeTypeName(r.RouteType))
 			}
-			t.Flush()
+			if err := t.Flush(); err != nil {
+				return err
+			}
 		}
 		return nil
 	},

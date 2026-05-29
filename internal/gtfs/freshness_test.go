@@ -70,6 +70,17 @@ func TestHeadFeed(t *testing.T) {
 	}
 }
 
+func TestHeadFeedNonSuccessStatusIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	if _, err := HeadFeed(context.Background(), srv.URL); err == nil {
+		t.Fatal("HeadFeed succeeded for HTTP 500")
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := Open(filepath.Join(t.TempDir(), "test.sqlite"))

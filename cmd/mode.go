@@ -46,6 +46,7 @@ Subcommands:
 	cmd.AddCommand(&cobra.Command{
 		Use:   "lines",
 		Short: fmt.Sprintf("List all %s routes", modeName),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, _, err := loadClient()
 			if err != nil {
@@ -111,6 +112,7 @@ func runModeShow(client *ptvapi.Client, routeType int, query string) error {
 	if route.RouteNumber != "" {
 		label = fmt.Sprintf("%s — %s", route.RouteNumber, route.RouteName)
 	}
+	label = render.CleanText(label)
 	fmt.Printf("%s (%s)\n", label, routeTypeName(route.RouteType))
 	fmt.Printf("Route ID: %d\n\n", route.RouteID)
 
@@ -119,7 +121,9 @@ func runModeShow(client *ptvapi.Client, routeType int, query string) error {
 	for _, d := range dirs.Directions {
 		dt.Row(d.DirectionID, d.DirectionName)
 	}
-	dt.Flush()
+	if err := dt.Flush(); err != nil {
+		return err
+	}
 	fmt.Println()
 
 	if len(dirs.Directions) > 0 {
@@ -129,12 +133,14 @@ func runModeShow(client *ptvapi.Client, routeType int, query string) error {
 			return serr
 		}
 		sortStopsBySequence(stops.Stops)
-		fmt.Printf("Stops (towards %s)\n", dirs.Directions[0].DirectionName)
+		fmt.Printf("Stops (towards %s)\n", render.CleanText(dirs.Directions[0].DirectionName))
 		st := render.NewTable("SEQ", "ID", "STOP", "SUBURB")
 		for _, s := range stops.Stops {
 			st.Row(s.StopSequence, s.StopID, s.StopName, s.StopSuburb)
 		}
-		st.Flush()
+		if err := st.Flush(); err != nil {
+			return err
+		}
 	}
 
 	if derr == nil {
@@ -142,9 +148,9 @@ func runModeShow(client *ptvapi.Client, routeType int, query string) error {
 		if len(ds) > 0 {
 			fmt.Println("\nDisruptions")
 			for _, d := range ds {
-				fmt.Printf("  • [%s] %s\n", d.DisruptionStatus, d.Title)
+				fmt.Printf("  • [%s] %s\n", render.CleanText(d.DisruptionStatus), render.CleanText(d.Title))
 				if d.URL != "" {
-					fmt.Printf("    %s\n", d.URL)
+					fmt.Printf("    %s\n", render.CleanText(d.URL))
 				}
 			}
 		}
@@ -158,6 +164,7 @@ func runModeLines(client *ptvapi.Client, routeType int) error {
 	if err != nil {
 		return err
 	}
+	resp.Routes = limitRoutes(resp.Routes)
 	if flagJSON {
 		return printJSON(resp)
 	}
@@ -165,14 +172,13 @@ func runModeLines(client *ptvapi.Client, routeType int) error {
 	sort.Slice(routes, func(i, j int) bool {
 		return routes[i].RouteName < routes[j].RouteName
 	})
-	if flagLimit > 0 && len(routes) > flagLimit {
-		routes = routes[:flagLimit]
-	}
 	t := render.NewTable("ID", "NUMBER", "NAME")
 	for _, r := range routes {
 		t.Row(r.RouteID, r.RouteNumber, r.RouteName)
 	}
-	t.Flush()
+	if err := t.Flush(); err != nil {
+		return err
+	}
 	fmt.Printf("\n%d %s routes\n", len(routes), routeTypeName(routeType))
 	return nil
 }
@@ -206,7 +212,7 @@ func runModeNext(client *ptvapi.Client, routeType int, query string) error {
 	if s, ok := resp.Stops[strconv.Itoa(stop.StopID)]; ok && s.StopName != "" {
 		stopName = s.StopName
 	}
-	fmt.Printf("Next departures — %s (%s)\n\n", stopName, routeTypeName(routeType))
+	fmt.Printf("Next departures — %s (%s)\n\n", render.CleanText(stopName), routeTypeName(routeType))
 
 	if len(deps) == 0 {
 		fmt.Println("No upcoming departures.")
@@ -235,7 +241,9 @@ func runModeNext(client *ptvapi.Client, routeType int, query string) error {
 		}
 		t.Row(countdown, schedStr, estStr, plat, routeLabel(resp, d.RouteID), destinationFor(resp, d), delayStatus(d, isEst))
 	}
-	t.Flush()
+	if err := t.Flush(); err != nil {
+		return err
+	}
 	return nil
 }
 

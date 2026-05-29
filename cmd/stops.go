@@ -46,6 +46,7 @@ var stopsNearCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		resp.Stops = limitStops(resp.Stops)
 		if flagJSON {
 			return printJSON(resp)
 		}
@@ -56,7 +57,9 @@ var stopsNearCmd = &cobra.Command{
 		for _, s := range resp.Stops {
 			t.Row(s.StopID, s.StopName, s.StopSuburb, routeTypeName(s.RouteType), fmt.Sprintf("%.0f", s.StopDistance))
 		}
-		t.Flush()
+		if err := t.Flush(); err != nil {
+			return err
+		}
 		return nil
 	},
 }
@@ -88,12 +91,14 @@ var stopsOnCmd = &cobra.Command{
 			return printJSON(resp)
 		}
 		sortStopsBySequence(resp.Stops)
-		fmt.Printf("Stops on %s (%s)\n", route.RouteName, routeTypeName(route.RouteType))
+		fmt.Printf("Stops on %s (%s)\n", render.CleanText(route.RouteName), routeTypeName(route.RouteType))
 		t := render.NewTable("ID", "STOP", "SUBURB")
 		for _, s := range resp.Stops {
 			t.Row(s.StopID, s.StopName, s.StopSuburb)
 		}
-		t.Flush()
+		if err := t.Flush(); err != nil {
+			return err
+		}
 		return nil
 	},
 }

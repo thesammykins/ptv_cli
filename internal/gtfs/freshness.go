@@ -2,6 +2,7 @@ package gtfs
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -58,6 +59,9 @@ func HeadFeed(ctx context.Context, url string) (FeedHead, error) {
 		return FeedHead{}, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return FeedHead{}, fmt.Errorf("GTFS feed HEAD failed: HTTP %d", resp.StatusCode)
+	}
 	return FeedHead{
 		ETag:          resp.Header.Get("ETag"),
 		LastModified:  resp.Header.Get("Last-Modified"),

@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const maxGTFSDownloadBytes = 512 << 20
+
 // DownloadResult carries the saved path plus upstream provenance headers used
 // to detect when a newer feed has been published.
 type DownloadResult struct {
@@ -23,7 +25,7 @@ type DownloadResult struct {
 // upstream provenance headers (ETag/Last-Modified/Content-Length). It streams
 // to disk to avoid holding the (~200MB) archive in memory.
 func Download(ctx context.Context, url, destDir string) (DownloadResult, error) {
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		return DownloadResult{}, err
 	}
 	dest := filepath.Join(destDir, "gtfs.zip")
@@ -41,16 +43,25 @@ func Download(ctx context.Context, url, destDir string) (DownloadResult, error) 
 	if resp.StatusCode != http.StatusOK {
 		return DownloadResult{}, fmt.Errorf("GTFS download failed: HTTP %d", resp.StatusCode)
 	}
+	if resp.ContentLength > maxGTFSDownloadBytes {
+		return DownloadResult{}, fmt.Errorf("GTFS download too large: %d bytes exceeds %d", resp.ContentLength, maxGTFSDownloadBytes)
+	}
 
 	tmp := dest + ".tmp"
-	f, err := os.Create(tmp)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return DownloadResult{}, err
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	n, err := io.Copy(f, io.LimitReader(resp.Body, maxGTFSDownloadBytes+1))
+	if err != nil {
 		f.Close()
 		os.Remove(tmp)
 		return DownloadResult{}, fmt.Errorf("writing GTFS feed: %w", err)
+	}
+	if n > maxGTFSDownloadBytes {
+		f.Close()
+		os.Remove(tmp)
+		return DownloadResult{}, fmt.Errorf("GTFS download too large: exceeded %d bytes", maxGTFSDownloadBytes)
 	}
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)

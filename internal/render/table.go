@@ -23,7 +23,7 @@ func NewTable(headers ...string) *Table {
 // NewTableTo creates a table writing to w.
 func NewTableTo(out io.Writer, headers ...string) *Table {
 	w := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, strings.Join(headers, "\t"))
+	fmt.Fprintln(w, strings.Join(cleanStrings(headers), "\t"))
 	return &Table{w: w, columns: len(headers)}
 }
 
@@ -31,10 +31,28 @@ func NewTableTo(out io.Writer, headers ...string) *Table {
 func (t *Table) Row(cells ...any) {
 	parts := make([]string, len(cells))
 	for i, c := range cells {
-		parts[i] = fmt.Sprint(c)
+		parts[i] = CleanText(fmt.Sprint(c))
 	}
 	fmt.Fprintln(t.w, strings.Join(parts, "\t"))
 }
 
 // Flush renders the table.
-func (t *Table) Flush() { _ = t.w.Flush() }
+func (t *Table) Flush() error { return t.w.Flush() }
+
+// CleanText strips terminal control characters from human-readable output.
+func CleanText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+func cleanStrings(values []string) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = CleanText(v)
+	}
+	return out
+}

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/thesammykins/ptv_cli/internal/config"
 	"github.com/thesammykins/ptv_cli/internal/credstore"
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
+	"github.com/thesammykins/ptv_cli/internal/render"
 	"golang.org/x/term"
 )
 
@@ -29,6 +31,7 @@ Use 'ptv auth login' to store credentials securely in the OS secret store.`,
 var authLoginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Securely store PTV credentials in the OS secret store",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		devID, err := promptLine("PTV User/Developer ID: ")
 		if err != nil {
@@ -61,6 +64,7 @@ var authLoginCmd = &cobra.Command{
 var authLogoutCmd = &cobra.Command{
 	Use:   "logout",
 	Short: "Remove stored credentials from the OS secret store",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := credstore.Delete(); err != nil {
 			return fmt.Errorf("removing credentials: %w", err)
@@ -73,15 +77,19 @@ var authLogoutCmd = &cobra.Command{
 var authStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show which credential source is active",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
+		cfg, err := loadConfig()
 		if err != nil {
+			if !errors.Is(err, config.ErrMissingCredentials) {
+				return err
+			}
 			fmt.Println("No credentials configured.")
 			fmt.Println("Run 'ptv auth login' to store them securely.")
 			return nil
 		}
-		fmt.Printf("Credentials configured (source: %s)\n", cfg.CredentialSource)
-		fmt.Printf("User/Developer ID: %s\n", cfg.DevID)
+		fmt.Printf("Credentials configured (source: %s)\n", render.CleanText(string(cfg.CredentialSource)))
+		fmt.Printf("User/Developer ID: %s\n", render.CleanText(cfg.DevID))
 		return nil
 	},
 }
@@ -89,6 +97,7 @@ var authStatusCmd = &cobra.Command{
 var authCheckCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Verify PTV API credentials with a signed request",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, cfg, err := loadClient()
 		if err != nil {
@@ -101,14 +110,14 @@ var authCheckCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(resp)
 		}
-		fmt.Printf("Credentials OK (devid %s, source %s)\n", cfg.DevID, cfg.CredentialSource)
-		fmt.Printf("API version %s, health %d\n", resp.Status.Version, resp.Status.Health)
+		fmt.Printf("Credentials OK (devid %s, source %s)\n", render.CleanText(cfg.DevID), render.CleanText(string(cfg.CredentialSource)))
+		fmt.Printf("API version %s, health %d\n", render.CleanText(resp.Status.Version), resp.Status.Health)
 		fmt.Printf("Available modes: ")
 		for i, rt := range resp.RouteTypes {
 			if i > 0 {
 				fmt.Print(", ")
 			}
-			fmt.Print(rt.RouteTypeName)
+			fmt.Print(render.CleanText(rt.RouteTypeName))
 		}
 		fmt.Println()
 		return nil

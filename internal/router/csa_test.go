@@ -215,3 +215,14 @@ func TestPlanEarliestArrivalKeepsSameTripAsOneLeg(t *testing.T) {
 		t.Fatalf("leg = %s to %s, want Origin to Dest", j.Legs[0].FromStop.Name, j.Legs[0].ToStop.Name)
 	}
 }
+
+func TestPlanEarliestArrivalRejectsInvalidStopIndex(t *testing.T) {
+	tt := &model.Timetable{
+		Stops:     []model.Stop{{Index: 0, ID: "s0", Name: "Origin"}},
+		Footpaths: make([][]model.Footpath, 1),
+	}
+	_, err := PlanEarliestArrival(tt, []int{1}, []int{0}, time.Unix(0, 0))
+	if err == nil {
+		t.Fatal("expected invalid source stop index error")
+	}
+}

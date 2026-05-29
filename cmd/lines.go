@@ -31,6 +31,7 @@ var linesCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		resp.Routes = limitRoutes(resp.Routes)
 		if flagJSON {
 			return printJSON(resp)
 		}
@@ -41,14 +42,13 @@ var linesCmd = &cobra.Command{
 			}
 			return routes[i].RouteName < routes[j].RouteName
 		})
-		if flagLimit > 0 && len(routes) > flagLimit {
-			routes = routes[:flagLimit]
-		}
 		t := render.NewTable("ID", "NUMBER", "NAME", "MODE")
 		for _, r := range routes {
 			t.Row(r.RouteID, r.RouteNumber, r.RouteName, routeTypeName(r.RouteType))
 		}
-		t.Flush()
+		if err := t.Flush(); err != nil {
+			return err
+		}
 		fmt.Printf("\n%d routes\n", len(routes))
 		return nil
 	},
@@ -97,7 +97,7 @@ func runLineShow(client *ptvapi.Client, query string, routeTypes []int) error {
 		return printJSON(out)
 	}
 
-	fmt.Printf("%s — %s (%s)\n", route.RouteName, route.RouteNumber, routeTypeName(route.RouteType))
+	fmt.Printf("%s — %s (%s)\n", render.CleanText(route.RouteName), render.CleanText(route.RouteNumber), routeTypeName(route.RouteType))
 	fmt.Printf("Route ID: %d\n\n", route.RouteID)
 
 	fmt.Println("Directions")
@@ -105,7 +105,9 @@ func runLineShow(client *ptvapi.Client, query string, routeTypes []int) error {
 	for _, d := range dirs.Directions {
 		dt.Row(d.DirectionID, d.DirectionName)
 	}
-	dt.Flush()
+	if err := dt.Flush(); err != nil {
+		return err
+	}
 	fmt.Println()
 
 	// Stops in the first direction give the line's stop order.
@@ -116,12 +118,14 @@ func runLineShow(client *ptvapi.Client, query string, routeTypes []int) error {
 			return err
 		}
 		sortStopsBySequence(stops.Stops)
-		fmt.Printf("Stops (towards %s)\n", dirs.Directions[0].DirectionName)
+		fmt.Printf("Stops (towards %s)\n", render.CleanText(dirs.Directions[0].DirectionName))
 		st := render.NewTable("SEQ", "ID", "STOP", "SUBURB")
 		for _, s := range stops.Stops {
 			st.Row(s.StopSequence, s.StopID, s.StopName, s.StopSuburb)
 		}
-		st.Flush()
+		if err := st.Flush(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

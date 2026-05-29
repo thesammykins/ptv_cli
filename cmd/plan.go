@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/thesammykins/ptv_cli/internal/config"
 	"github.com/thesammykins/ptv_cli/internal/geocode"
 	"github.com/thesammykins/ptv_cli/internal/gtfs"
 	"github.com/thesammykins/ptv_cli/internal/model"
@@ -53,7 +52,7 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 			return fmt.Errorf("use only one of --depart or --arrive-by")
 		}
 
-		cfg, err := config.Load()
+		cfg, err := loadConfig()
 		if err != nil {
 			return err
 		}
@@ -91,7 +90,7 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 		if !planNoUpdateCheck {
 			rep := gtfs.Freshness(ctx(), store, cfg.GTFSURL, true, false)
 			for _, w := range freshnessWarnings(rep) {
-				fmt.Fprintln(os.Stderr, w)
+				fmt.Fprintln(os.Stderr, render.CleanText(w))
 			}
 		}
 
@@ -134,9 +133,11 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 		if flagJSON {
 			return printJSON(journey)
 		}
-		renderJourney(journey, orLabel(args[0], fromLabel), orLabel(args[1], toLabel), arriveByMode, queryTime)
+		if err := renderJourney(journey, orLabel(args[0], fromLabel), orLabel(args[1], toLabel), arriveByMode, queryTime); err != nil {
+			return err
+		}
 		if disruptionWarn != "" {
-			fmt.Println("\nNote:", disruptionWarn)
+			fmt.Println("\nNote:", render.CleanText(disruptionWarn))
 		}
 		return nil
 	},
@@ -220,14 +221,14 @@ func stopsWithinRadius(tt *model.Timetable, lat, lon, radiusM float64) []int {
 }
 
 // renderJourney prints a planned itinerary as a sequence of legs.
-func renderJourney(j *model.Journey, from, to string, arriveBy bool, queryTime time.Time) {
+func renderJourney(j *model.Journey, from, to string, arriveBy bool, queryTime time.Time) error {
 	loc := melbourneLocation()
 	if len(j.Legs) == 0 {
 		fmt.Println("No journey found.")
-		return
+		return nil
 	}
 
-	fmt.Printf("Journey: %s → %s\n", from, to)
+	fmt.Printf("Journey: %s → %s\n", render.CleanText(from), render.CleanText(to))
 	dep := j.DepTime.In(loc)
 	arr := j.ArrTime.In(loc)
 	dur := arr.Sub(dep).Round(time.Minute)
@@ -251,7 +252,9 @@ func renderJourney(j *model.Journey, from, to string, arriveBy bool, queryTime t
 		}
 		t.Row(ld, la, gtfsModeName(l.RouteType), route, l.FromStop.Name, l.ToStop.Name, dashIfEmpty(l.Headsign))
 	}
-	t.Flush()
+	if err := t.Flush(); err != nil {
+		return err
+	}
 
 	if len(j.Disruptions) > 0 {
 		fmt.Println("\n⚠ Disruptions affecting this journey")
@@ -260,12 +263,13 @@ func renderJourney(j *model.Journey, from, to string, arriveBy bool, queryTime t
 			if status == "" {
 				status = "Disruption"
 			}
-			fmt.Printf("  • [%s] %s\n", status, d.Title)
+			fmt.Printf("  • [%s] %s\n", render.CleanText(status), render.CleanText(d.Title))
 			if d.URL != "" {
-				fmt.Printf("    %s\n", d.URL)
+				fmt.Printf("    %s\n", render.CleanText(d.URL))
 			}
 		}
 	}
+	return nil
 }
 
 // gtfsModeName maps a PTV GTFS feed mode (the feed/zip number) to a label.

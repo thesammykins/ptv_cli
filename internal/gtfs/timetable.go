@@ -52,7 +52,7 @@ func (s *Store) LoadTimetable(day time.Time) (*model.Timetable, error) {
 	if err := s.appendConnections(tt, stopIdx, dayActive, dayUnix, 0, false); err != nil {
 		return nil, err
 	}
-	// Previous-day overflow (segments departing at/after 24:00:00).
+	// Previous-day overflow (segments that reach the query day).
 	if err := s.appendConnections(tt, stopIdx, prevActive, prev.Unix(), 0, true); err != nil {
 		return nil, err
 	}
@@ -193,8 +193,8 @@ func (s *Store) activeServices(day time.Time) (map[string]bool, error) {
 }
 
 // appendConnections builds elementary connections for active services. When
-// overflowOnly is true, only segments departing at/after 24:00:00 are emitted
-// (the previous day's after-midnight running) and shifted onto the next day.
+// overflowOnly is true, only segments arriving at/after 24:00:00 are emitted
+// so after-midnight arrivals from previous-day services remain plannable.
 func (s *Store) appendConnections(tt *model.Timetable, stopIdx map[string]int, active map[string]bool, baseUnix int64, _ int, overflowOnly bool) error {
 	if len(active) == 0 {
 		return nil
@@ -262,7 +262,7 @@ func (s *Store) appendConnections(tt *model.Timetable, stopIdx map[string]int, a
 		}
 		if havePrev {
 			emit := true
-			if overflowOnly && prevDep < 86400 {
+			if overflowOnly && arrSec < 86400 {
 				emit = false
 			}
 			if emit {

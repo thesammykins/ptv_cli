@@ -17,6 +17,7 @@ var (
 var disruptionsCmd = &cobra.Command{
 	Use:   "disruptions",
 	Short: "View current and planned service disruptions",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, _, err := loadClient()
 		if err != nil {
@@ -57,13 +58,15 @@ var disruptionsCmd = &cobra.Command{
 			if len(items) == 0 {
 				continue
 			}
-			fmt.Printf("\n%s\n", m)
+			fmt.Printf("\n%s\n", render.CleanText(m))
 			t := render.NewTable("STATUS", "TITLE")
 			for _, d := range items {
 				t.Row(d.DisruptionStatus, d.Title)
 				total++
 			}
-			t.Flush()
+			if err := t.Flush(); err != nil {
+				return err
+			}
 		}
 		if total == 0 {
 			fmt.Println("No disruptions.")

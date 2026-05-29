@@ -15,6 +15,7 @@ var (
 var fareCmd = &cobra.Command{
 	Use:   "fare",
 	Short: "Estimate a myki fare by zone",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, _, err := loadClient()
 		if err != nil {
@@ -39,7 +40,9 @@ var fareCmd = &cobra.Command{
 				fmt.Sprintf("$%.2f", p.FareDailyPeak),
 				fmt.Sprintf("$%.2f", p.FareDailyOffPeak))
 		}
-		t.Flush()
+		if err := t.Flush(); err != nil {
+			return err
+		}
 		return nil
 	},
 }

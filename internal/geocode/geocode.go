@@ -172,12 +172,12 @@ func (g *Geocoder) writeCache(query string, p *Place) {
 	if g.CacheDir == "" {
 		return
 	}
-	if err := os.MkdirAll(g.CacheDir, 0o755); err != nil {
+	if err := os.MkdirAll(g.CacheDir, 0o700); err != nil {
 		return
 	}
 	data, err := json.Marshal(p)
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(g.cacheFile(query), data, 0o644)
+	_ = os.WriteFile(g.cacheFile(query), data, 0o600)
 }

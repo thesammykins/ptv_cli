@@ -62,7 +62,9 @@ Credentials are resolved in this order:
 1. Environment variables `PTV_API_KEY` and `PTV_API_USERID`.
 2. The OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret
    Service) — populated via `ptv auth login`.
-3. A `.env` file in the working directory.
+
+For local development only, pass `--env-file <path>` to load a dotenv file
+explicitly. The CLI does not auto-read `.env` from the working directory.
 
 Store them securely in the OS keyring:
 
@@ -199,7 +201,7 @@ is skipped with a one-line note (the planner itself is fully local).
 
 ```
 internal/
-  config/     credential resolution (env → keyring → .env), paths
+  config/     credential resolution (env → keyring; explicit --env-file), paths
   credstore/  cross-platform OS keyring wrapper (go-keyring)
   geocode/    OpenStreetMap Nominatim client (VIC-biased, cached, throttled)
   ptvapi/     HMAC-SHA1 signer, HTTP client, typed v3 responses, endpoints
@@ -228,12 +230,14 @@ ptv tram 109 --json                              # route, directions, stops, dis
 ptv next "Flinders Street" --mode train --json
 ptv gtfs status --json                           # counts + freshness{} report
 ptv gtfs check --json                            # upstream update check
+ptv gtfs update --json                           # ingest counts after update
 ptv version --json
 ```
 
 ## Releases
 
-Tagging a commit `vX.Y.Z` triggers the **Release** GitHub Action, which runs
+Tagging a commit `vX.Y.Z` triggers the **Release** GitHub Action, which first
+runs `go build ./...`, `go vet ./...`, and `go test ./...`, then runs
 [GoReleaser](https://goreleaser.com/) to cross-compile `ptv` for
 linux/macOS/windows × amd64/arm64 (pure-Go, `CGO_ENABLED=0`) and attaches the
 archives + `checksums.txt` to a GitHub Release. The binary's `version`,
@@ -245,8 +249,8 @@ git tag v0.1.0
 git push origin v0.1.0   # → builds and publishes the release
 ```
 
-A lightweight **CI** workflow runs `go build`/`go vet`/`go test` on every push
-and pull request.
+A lightweight **CI** workflow runs `go build`/`go vet`/`go test` on pushes to
+`main` and pull requests.
 
 ## Development
 
@@ -262,7 +266,8 @@ parsing.
 
 ## Notes
 
-- Never commit `.env` or credentials. Prefer `ptv auth login` (keyring).
+- Never commit `.env` or credentials. Prefer `ptv auth login` (keyring), or use
+  `--env-file <path>` only when you intentionally need dotenv-based local setup.
 - The GTFS download is large; ingest once and refresh on demand.
 - There is **no journey-planning endpoint** in the PTV API — `ptv plan` is
   built entirely from the GTFS feed, optionally surfacing real-time data via

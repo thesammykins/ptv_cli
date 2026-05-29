@@ -21,8 +21,15 @@ const (
 	gridDegrees       = 0.0025
 )
 
+const (
+	maxOuterZipEntries = 100
+	maxInnerZipEntries = 32
+	maxInnerZipBytes   = int64(256 << 20)
+	maxCSVEntryBytes   = int64(2 << 30)
+)
+
 // Ingest parses the GTFS zip-of-zips at zipPath into the store. Existing data
-// is cleared first.
+// is cleared inside the ingest transaction.
 func Ingest(ctx context.Context, store *Store, zipPath string, progress func(string)) error {
 	if progress == nil {
 		progress = func(string) {}
@@ -33,9 +40,8 @@ func Ingest(ctx context.Context, store *Store, zipPath string, progress func(str
 		return fmt.Errorf("opening GTFS archive: %w", err)
 	}
 	defer zr.Close()
-
-	if err := store.clear(); err != nil {
-		return err
+	if len(zr.File) > maxOuterZipEntries {
+		return fmt.Errorf("GTFS archive has too many entries: %d exceeds %d", len(zr.File), maxOuterZipEntries)
 	}
 
 	tx, err := store.db.Begin()
@@ -43,6 +49,9 @@ func Ingest(ctx context.Context, store *Store, zipPath string, progress func(str
 		return err
 	}
 	defer tx.Rollback()
+	if err := clearTx(tx); err != nil {
+		return err
+	}
 
 	for _, f := range zr.File {
 		if !strings.HasSuffix(strings.ToLower(f.Name), "google_transit.zip") {
@@ -93,18 +102,27 @@ func prefix(feedMode int, id string) string {
 }
 
 func ingestInnerZip(ctx context.Context, tx *sql.Tx, f *zip.File, feedMode int) error {
+	if f.UncompressedSize64 > uint64(maxInnerZipBytes) {
+		return fmt.Errorf("inner GTFS zip too large: %d bytes exceeds %d", f.UncompressedSize64, maxInnerZipBytes)
+	}
 	rc, err := f.Open()
 	if err != nil {
 		return err
 	}
-	data, err := io.ReadAll(rc)
+	data, err := io.ReadAll(io.LimitReader(rc, maxInnerZipBytes+1))
 	rc.Close()
 	if err != nil {
 		return err
 	}
+	if int64(len(data)) > maxInnerZipBytes {
+		return fmt.Errorf("inner GTFS zip too large: exceeded %d bytes", maxInnerZipBytes)
+	}
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return err
+	}
+	if len(zr.File) > maxInnerZipEntries {
+		return fmt.Errorf("inner GTFS zip has too many entries: %d exceeds %d", len(zr.File), maxInnerZipEntries)
 	}
 
 	for _, inner := range zr.File {
@@ -139,15 +157,42 @@ func ingestInnerZip(ctx context.Context, tx *sql.Tx, f *zip.File, feedMode int) 
 
 // withCSV opens a zip entry and invokes fn with a configured CSV reader.
 func withCSV(f *zip.File, fn func(*csv.Reader) error) error {
+	if f.UncompressedSize64 > uint64(maxCSVEntryBytes) {
+		return fmt.Errorf("CSV entry too large: %d bytes exceeds %d", f.UncompressedSize64, maxCSVEntryBytes)
+	}
 	rc, err := f.Open()
 	if err != nil {
 		return err
 	}
 	defer rc.Close()
-	r := csv.NewReader(rc)
+	r := csv.NewReader(&byteLimitReader{r: rc, limit: maxCSVEntryBytes})
 	r.ReuseRecord = true
 	r.FieldsPerRecord = -1
 	return fn(r)
+}
+
+type byteLimitReader struct {
+	r     io.Reader
+	limit int64
+	read  int64
+}
+
+func (r *byteLimitReader) Read(p []byte) (int, error) {
+	remaining := r.limit - r.read
+	if remaining <= 0 {
+		var probe [1]byte
+		n, err := r.r.Read(probe[:])
+		if n > 0 {
+			return 0, fmt.Errorf("CSV entry too large: exceeded %d bytes", r.limit)
+		}
+		return 0, err
+	}
+	if int64(len(p)) > remaining {
+		p = p[:remaining]
+	}
+	n, err := r.r.Read(p)
+	r.read += int64(n)
+	return n, err
 }
 
 // headerIndex reads the header row and returns a name→index map.
@@ -183,6 +228,9 @@ func ingestStops(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) e
 	}
 	defer stmt.Close()
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		row, err := r.Read()
 		if err == io.EOF {
 			break
@@ -190,13 +238,23 @@ func ingestStops(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) e
 		if err != nil {
 			return err
 		}
-		lat, _ := strconv.ParseFloat(get(row, idx, "stop_lat"), 64)
-		lon, _ := strconv.ParseFloat(get(row, idx, "stop_lon"), 64)
+		stopID := get(row, idx, "stop_id")
+		if stopID == "" {
+			return fmt.Errorf("missing stop_id")
+		}
+		lat, err := parseRequiredFloat(row, idx, "stop_lat")
+		if err != nil {
+			return fmt.Errorf("stop %s: %w", stopID, err)
+		}
+		lon, err := parseRequiredFloat(row, idx, "stop_lon")
+		if err != nil {
+			return fmt.Errorf("stop %s: %w", stopID, err)
+		}
 		parent := get(row, idx, "parent_station")
 		if parent != "" {
 			parent = prefix(feedMode, parent)
 		}
-		if _, err := stmt.Exec(prefix(feedMode, get(row, idx, "stop_id")), get(row, idx, "stop_name"), lat, lon, parent); err != nil {
+		if _, err := stmt.Exec(prefix(feedMode, stopID), get(row, idx, "stop_name"), lat, lon, parent); err != nil {
 			return err
 		}
 	}
@@ -214,6 +272,9 @@ func ingestRoutes(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) 
 	}
 	defer stmt.Close()
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		row, err := r.Read()
 		if err == io.EOF {
 			break
@@ -221,8 +282,15 @@ func ingestRoutes(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) 
 		if err != nil {
 			return err
 		}
-		rtype, _ := strconv.Atoi(get(row, idx, "route_type"))
-		if _, err := stmt.Exec(prefix(feedMode, get(row, idx, "route_id")), get(row, idx, "route_short_name"), get(row, idx, "route_long_name"), rtype, feedMode); err != nil {
+		routeID := get(row, idx, "route_id")
+		if routeID == "" {
+			return fmt.Errorf("missing route_id")
+		}
+		rtype, err := parseRequiredInt(row, idx, "route_type")
+		if err != nil {
+			return fmt.Errorf("route %s: %w", routeID, err)
+		}
+		if _, err := stmt.Exec(prefix(feedMode, routeID), get(row, idx, "route_short_name"), get(row, idx, "route_long_name"), rtype, feedMode); err != nil {
 			return err
 		}
 	}
@@ -240,6 +308,9 @@ func ingestTrips(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) e
 	}
 	defer stmt.Close()
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		row, err := r.Read()
 		if err == io.EOF {
 			break
@@ -247,8 +318,17 @@ func ingestTrips(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) e
 		if err != nil {
 			return err
 		}
-		dir, _ := strconv.Atoi(get(row, idx, "direction_id"))
-		if _, err := stmt.Exec(prefix(feedMode, get(row, idx, "trip_id")), prefix(feedMode, get(row, idx, "route_id")), prefix(feedMode, get(row, idx, "service_id")), get(row, idx, "trip_headsign"), dir); err != nil {
+		tripID := get(row, idx, "trip_id")
+		routeID := get(row, idx, "route_id")
+		serviceID := get(row, idx, "service_id")
+		if tripID == "" || routeID == "" || serviceID == "" {
+			return fmt.Errorf("trip row missing trip_id, route_id, or service_id")
+		}
+		dir, err := parseOptionalInt(row, idx, "direction_id", 0)
+		if err != nil {
+			return fmt.Errorf("trip %s: %w", tripID, err)
+		}
+		if _, err := stmt.Exec(prefix(feedMode, tripID), prefix(feedMode, routeID), prefix(feedMode, serviceID), get(row, idx, "trip_headsign"), dir); err != nil {
 			return err
 		}
 	}
@@ -266,6 +346,9 @@ func ingestStopTimes(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode in
 	}
 	defer stmt.Close()
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		row, err := r.Read()
 		if err == io.EOF {
 			break
@@ -273,10 +356,24 @@ func ingestStopTimes(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode in
 		if err != nil {
 			return err
 		}
-		seq, _ := strconv.Atoi(get(row, idx, "stop_sequence"))
-		arr, _ := parseGTFSTime(get(row, idx, "arrival_time"))
-		dep, _ := parseGTFSTime(get(row, idx, "departure_time"))
-		if _, err := stmt.Exec(prefix(feedMode, get(row, idx, "trip_id")), prefix(feedMode, get(row, idx, "stop_id")), seq, arr, dep); err != nil {
+		tripID := get(row, idx, "trip_id")
+		stopID := get(row, idx, "stop_id")
+		if tripID == "" || stopID == "" {
+			return fmt.Errorf("stop_times row missing trip_id or stop_id")
+		}
+		seq, err := parseRequiredInt(row, idx, "stop_sequence")
+		if err != nil {
+			return fmt.Errorf("trip %s stop %s: %w", tripID, stopID, err)
+		}
+		arr, ok := parseGTFSTime(get(row, idx, "arrival_time"))
+		if !ok {
+			return fmt.Errorf("trip %s stop %s: invalid arrival_time", tripID, stopID)
+		}
+		dep, ok := parseGTFSTime(get(row, idx, "departure_time"))
+		if !ok {
+			return fmt.Errorf("trip %s stop %s: invalid departure_time", tripID, stopID)
+		}
+		if _, err := stmt.Exec(prefix(feedMode, tripID), prefix(feedMode, stopID), seq, arr, dep); err != nil {
 			return err
 		}
 	}
@@ -293,8 +390,10 @@ func ingestCalendar(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int
 		return err
 	}
 	defer stmt.Close()
-	atoi := func(s string) int { n, _ := strconv.Atoi(s); return n }
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		row, err := r.Read()
 		if err == io.EOF {
 			break
@@ -302,11 +401,43 @@ func ingestCalendar(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int
 		if err != nil {
 			return err
 		}
+		serviceID := get(row, idx, "service_id")
+		if serviceID == "" {
+			return fmt.Errorf("missing service_id")
+		}
+		monday, err := parseRequiredInt(row, idx, "monday")
+		if err != nil {
+			return fmt.Errorf("service %s: %w", serviceID, err)
+		}
+		tuesday, err := parseRequiredInt(row, idx, "tuesday")
+		if err != nil {
+			return fmt.Errorf("service %s: %w", serviceID, err)
+		}
+		wednesday, err := parseRequiredInt(row, idx, "wednesday")
+		if err != nil {
+			return fmt.Errorf("service %s: %w", serviceID, err)
+		}
+		thursday, err := parseRequiredInt(row, idx, "thursday")
+		if err != nil {
+			return fmt.Errorf("service %s: %w", serviceID, err)
+		}
+		friday, err := parseRequiredInt(row, idx, "friday")
+		if err != nil {
+			return fmt.Errorf("service %s: %w", serviceID, err)
+		}
+		saturday, err := parseRequiredInt(row, idx, "saturday")
+		if err != nil {
+			return fmt.Errorf("service %s: %w", serviceID, err)
+		}
+		sunday, err := parseRequiredInt(row, idx, "sunday")
+		if err != nil {
+			return fmt.Errorf("service %s: %w", serviceID, err)
+		}
 		if _, err := stmt.Exec(
-			prefix(feedMode, get(row, idx, "service_id")),
-			atoi(get(row, idx, "monday")), atoi(get(row, idx, "tuesday")), atoi(get(row, idx, "wednesday")),
-			atoi(get(row, idx, "thursday")), atoi(get(row, idx, "friday")), atoi(get(row, idx, "saturday")),
-			atoi(get(row, idx, "sunday")), get(row, idx, "start_date"), get(row, idx, "end_date")); err != nil {
+			prefix(feedMode, serviceID),
+			monday, tuesday, wednesday,
+			thursday, friday, saturday,
+			sunday, get(row, idx, "start_date"), get(row, idx, "end_date")); err != nil {
 			return err
 		}
 	}
@@ -324,6 +455,9 @@ func ingestCalendarDates(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMod
 	}
 	defer stmt.Close()
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		row, err := r.Read()
 		if err == io.EOF {
 			break
@@ -331,8 +465,15 @@ func ingestCalendarDates(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMod
 		if err != nil {
 			return err
 		}
-		ex, _ := strconv.Atoi(get(row, idx, "exception_type"))
-		if _, err := stmt.Exec(prefix(feedMode, get(row, idx, "service_id")), get(row, idx, "date"), ex); err != nil {
+		serviceID := get(row, idx, "service_id")
+		if serviceID == "" {
+			return fmt.Errorf("missing service_id")
+		}
+		ex, err := parseRequiredInt(row, idx, "exception_type")
+		if err != nil {
+			return fmt.Errorf("service %s: %w", serviceID, err)
+		}
+		if _, err := stmt.Exec(prefix(feedMode, serviceID), get(row, idx, "date"), ex); err != nil {
 			return err
 		}
 	}
@@ -350,6 +491,9 @@ func ingestTransfers(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode in
 	}
 	defer stmt.Close()
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		row, err := r.Read()
 		if err == io.EOF {
 			break
@@ -357,9 +501,20 @@ func ingestTransfers(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode in
 		if err != nil {
 			return err
 		}
-		ttype, _ := strconv.Atoi(get(row, idx, "transfer_type"))
-		mt, _ := strconv.Atoi(get(row, idx, "min_transfer_time"))
-		if _, err := stmt.Exec(prefix(feedMode, get(row, idx, "from_stop_id")), prefix(feedMode, get(row, idx, "to_stop_id")), ttype, mt); err != nil {
+		fromStopID := get(row, idx, "from_stop_id")
+		toStopID := get(row, idx, "to_stop_id")
+		if fromStopID == "" || toStopID == "" {
+			return fmt.Errorf("transfer row missing from_stop_id or to_stop_id")
+		}
+		ttype, err := parseRequiredInt(row, idx, "transfer_type")
+		if err != nil {
+			return fmt.Errorf("transfer %s to %s: %w", fromStopID, toStopID, err)
+		}
+		mt, err := parseOptionalInt(row, idx, "min_transfer_time", 0)
+		if err != nil {
+			return fmt.Errorf("transfer %s to %s: %w", fromStopID, toStopID, err)
+		}
+		if _, err := stmt.Exec(prefix(feedMode, fromStopID), prefix(feedMode, toStopID), ttype, mt); err != nil {
 			return err
 		}
 	}
@@ -444,10 +599,45 @@ func haversine(lat1, lon1, lat2, lon2 float64) float64 {
 	return r * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 
-// clear removes all ingested rows.
-func (s *Store) clear() error {
+func parseRequiredFloat(row []string, idx map[string]int, name string) (float64, error) {
+	v := get(row, idx, name)
+	if v == "" {
+		return 0, fmt.Errorf("missing %s", name)
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", name, err)
+	}
+	return n, nil
+}
+
+func parseRequiredInt(row []string, idx map[string]int, name string) (int, error) {
+	v := get(row, idx, name)
+	if v == "" {
+		return 0, fmt.Errorf("missing %s", name)
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", name, err)
+	}
+	return n, nil
+}
+
+func parseOptionalInt(row []string, idx map[string]int, name string, fallback int) (int, error) {
+	v := get(row, idx, name)
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", name, err)
+	}
+	return n, nil
+}
+
+func clearTx(tx *sql.Tx) error {
 	for _, t := range []string{"stops", "routes", "trips", "stop_times", "calendar", "calendar_dates", "transfers", "meta"} {
-		if _, err := s.db.Exec("DELETE FROM " + t); err != nil {
+		if _, err := tx.Exec("DELETE FROM " + t); err != nil {
 			return err
 		}
 	}

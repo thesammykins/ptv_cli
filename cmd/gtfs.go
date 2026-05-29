@@ -5,8 +5,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/thesammykins/ptv_cli/internal/config"
 	"github.com/thesammykins/ptv_cli/internal/gtfs"
+	"github.com/thesammykins/ptv_cli/internal/render"
 )
 
 var gtfsKeepZip bool
@@ -20,14 +20,17 @@ var gtfsCmd = &cobra.Command{
 var gtfsUpdateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Download and ingest the latest PTV GTFS feed",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
+		cfg, err := loadConfig()
 		if err != nil {
 			return err
 		}
 
-		fmt.Printf("Downloading GTFS feed from %s\n", cfg.GTFSURL)
-		fmt.Println("(this is a large file, ~200MB; please wait)")
+		if !flagJSON {
+			fmt.Printf("Downloading GTFS feed from %s\n", render.CleanText(cfg.GTFSURL))
+			fmt.Println("(this is a large file, ~200MB; please wait)")
+		}
 		dl, err := gtfs.Download(ctx(), cfg.GTFSURL, cfg.DataDir)
 		if err != nil {
 			return err
@@ -39,9 +42,13 @@ var gtfsUpdateCmd = &cobra.Command{
 		}
 		defer store.Close()
 
-		fmt.Println("Ingesting feed into local database...")
+		if !flagJSON {
+			fmt.Println("Ingesting feed into local database...")
+		}
 		if err := gtfs.Ingest(ctx(), store, dl.Path, func(msg string) {
-			fmt.Printf("  %s\n", msg)
+			if !flagJSON {
+				fmt.Printf("  %s\n", render.CleanText(msg))
+			}
 		}); err != nil {
 			return err
 		}
@@ -56,6 +63,17 @@ var gtfsUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if flagJSON {
+			return printJSON(map[string]any{
+				"database":       cfg.DBPath(),
+				"downloaded_zip": dl.Path,
+				"kept_zip":       gtfsKeepZip,
+				"stops":          counts["stops"],
+				"routes":         counts["routes"],
+				"trips":          counts["trips"],
+				"stop_times":     counts["stop_times"],
+			})
+		}
 		fmt.Printf("Done. stops=%d routes=%d trips=%d stop_times=%d\n",
 			counts["stops"], counts["routes"], counts["trips"], counts["stop_times"])
 		return nil
@@ -65,8 +83,9 @@ var gtfsUpdateCmd = &cobra.Command{
 var gtfsStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show the local GTFS dataset status",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
+		cfg, err := loadConfig()
 		if err != nil {
 			return err
 		}
@@ -104,18 +123,18 @@ var gtfsStatusCmd = &cobra.Command{
 				"freshness":   rep,
 			})
 		}
-		fmt.Printf("Database: %s\n", cfg.DBPath())
-		fmt.Printf("Ingested at: %s\n", when)
+		fmt.Printf("Database: %s\n", render.CleanText(cfg.DBPath()))
+		fmt.Printf("Ingested at: %s\n", render.CleanText(when))
 		if rep.AgeHours > 0 {
 			fmt.Printf("Age: %.1f days (stale after %.0f)%s\n",
 				rep.AgeHours/24, rep.StaleAfterDays, ifStale(rep.Stale))
 		}
 		if rep.FeedModified != "" {
-			fmt.Printf("Feed last-modified: %s\n", rep.FeedModified)
+			fmt.Printf("Feed last-modified: %s\n", render.CleanText(rep.FeedModified))
 		}
 		switch {
 		case rep.CheckError != "":
-			fmt.Printf("Update check: failed (%s)\n", rep.CheckError)
+			fmt.Printf("Update check: failed (%s)\n", render.CleanText(rep.CheckError))
 		case rep.Checked && rep.UpdateAvailable:
 			fmt.Println("Update check: a newer feed is available — run 'ptv gtfs update'.")
 		case rep.Checked:
@@ -130,8 +149,9 @@ var gtfsStatusCmd = &cobra.Command{
 var gtfsCheckCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check the upstream feed for a newer GTFS dataset",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
+		cfg, err := loadConfig()
 		if err != nil {
 			return err
 		}
@@ -173,11 +193,11 @@ var gtfsCheckCmd = &cobra.Command{
 func freshnessWarnings(r gtfs.FreshnessReport) []string {
 	var out []string
 	if r.Stale {
-		out = append(out, fmt.Sprintf("⚠ Local GTFS data is %.0f days old (stale after %.0f). Run 'ptv gtfs update'.",
+		out = append(out, fmt.Sprintf("Local GTFS data is %.0f days old (stale after %.0f). Run 'ptv gtfs update'.",
 			r.AgeHours/24, r.StaleAfterDays))
 	}
 	if r.UpdateAvailable {
-		out = append(out, "⚠ A newer PTV GTFS feed is available upstream. Run 'ptv gtfs update'.")
+		out = append(out, "A newer PTV GTFS feed is available upstream. Run 'ptv gtfs update'.")
 	}
 	return out
 }

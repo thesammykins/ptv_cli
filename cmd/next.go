@@ -79,7 +79,7 @@ scheduled vs estimated times, platform numbers and any disruptions.`,
 		if s, ok := resp.Stops[strconv.Itoa(stop.StopID)]; ok && s.StopName != "" {
 			stopName = s.StopName
 		}
-		fmt.Printf("Next departures — %s (%s)\n\n", stopName, routeTypeName(stop.RouteType))
+		fmt.Printf("Next departures — %s (%s)\n\n", render.CleanText(stopName), routeTypeName(stop.RouteType))
 
 		if len(deps) == 0 {
 			fmt.Println("No upcoming departures.")
@@ -114,7 +114,9 @@ scheduled vs estimated times, platform numbers and any disruptions.`,
 			status := delayStatus(d, isEst)
 			t.Row(countdown, schedStr, estStr, plat, routeName, towards, status)
 		}
-		t.Flush()
+		if err := t.Flush(); err != nil {
+			return err
+		}
 
 		// Surface any disruptions referenced by these departures.
 		if len(resp.Disruptions) > 0 {
@@ -130,7 +132,7 @@ scheduled vs estimated times, platform numbers and any disruptions.`,
 							fmt.Println("\nDisruptions")
 							first = false
 						}
-						fmt.Printf("  • [%s] %s\n", dis.DisruptionStatus, dis.Title)
+						fmt.Printf("  • [%s] %s\n", render.CleanText(dis.DisruptionStatus), render.CleanText(dis.Title))
 						printed[id] = true
 					}
 				}

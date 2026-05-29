@@ -137,3 +137,10 @@ func limitDisruptionMap(items map[string][]ptvapi.Disruption) map[string][]ptvap
 	}
 	return out
 }
+
+func limitRoutes(routes []ptvapi.Route) []ptvapi.Route {
+	if flagLimit > 0 && len(routes) > flagLimit {
+		return routes[:flagLimit]
+	}
+	return routes
+}

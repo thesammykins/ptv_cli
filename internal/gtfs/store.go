@@ -19,17 +19,27 @@ type Store struct {
 // Open opens (and creates if needed) the GTFS database at path.
 func Open(path string) (*Store, error) {
 	if dir := filepath.Dir(path); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
+	}
+	if f, err := os.OpenFile(path, os.O_CREATE, 0o600); err != nil {
+		return nil, err
+	} else if err := f.Close(); err != nil {
+		return nil, err
 	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1) // SQLite TEMP tables are connection-scoped.
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("creating schema: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		db.Close()
+		return nil, err
 	}
 	return &Store{db: db}, nil
 }
@@ -95,6 +105,9 @@ func parseGTFSTime(v string) (int, bool) {
 	m, err2 := strconv.Atoi(parts[1])
 	sec, err3 := strconv.Atoi(parts[2])
 	if err1 != nil || err2 != nil || err3 != nil {
+		return 0, false
+	}
+	if h < 0 || m < 0 || m > 59 || sec < 0 || sec > 59 {
 		return 0, false
 	}
 	return h*3600 + m*60 + sec, true

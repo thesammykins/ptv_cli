@@ -29,6 +29,9 @@ var searchCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		resp.Stops = limitStops(resp.Stops)
+		resp.Routes = limitRoutes(resp.Routes)
+		resp.Outlets = limitOutlets(resp.Outlets)
 		if flagJSON {
 			return printJSON(resp)
 		}
@@ -36,32 +39,34 @@ var searchCmd = &cobra.Command{
 		if len(resp.Stops) > 0 {
 			fmt.Println("Stops")
 			t := render.NewTable("ID", "NAME", "SUBURB", "MODE")
-			for _, s := range limitStops(resp.Stops) {
+			for _, s := range resp.Stops {
 				t.Row(s.StopID, s.StopName, s.StopSuburb, routeTypeName(s.RouteType))
 			}
-			t.Flush()
+			if err := t.Flush(); err != nil {
+				return err
+			}
 			fmt.Println()
 		}
 		if len(resp.Routes) > 0 {
 			fmt.Println("Routes")
 			t := render.NewTable("ID", "NUMBER", "NAME", "MODE")
-			routes := resp.Routes
-			if flagLimit > 0 && len(routes) > flagLimit {
-				routes = routes[:flagLimit]
-			}
-			for _, r := range routes {
+			for _, r := range resp.Routes {
 				t.Row(r.RouteID, r.RouteNumber, r.RouteName, routeTypeName(r.RouteType))
 			}
-			t.Flush()
+			if err := t.Flush(); err != nil {
+				return err
+			}
 			fmt.Println()
 		}
 		if len(resp.Outlets) > 0 {
 			fmt.Println("Outlets")
 			t := render.NewTable("NAME", "BUSINESS", "SUBURB")
-			for _, o := range limitOutlets(resp.Outlets) {
+			for _, o := range resp.Outlets {
 				t.Row(o.OutletName, o.OutletBusiness, o.OutletSuburb)
 			}
-			t.Flush()
+			if err := t.Flush(); err != nil {
+				return err
+			}
 		}
 		if len(resp.Stops) == 0 && len(resp.Routes) == 0 && len(resp.Outlets) == 0 {
 			fmt.Println("No results.")

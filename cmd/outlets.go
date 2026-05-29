@@ -41,7 +41,9 @@ var outletsCmd = &cobra.Command{
 		for _, o := range outlets {
 			t.Row(o.OutletName, o.OutletBusiness, o.OutletSuburb)
 		}
-		t.Flush()
+		if err := t.Flush(); err != nil {
+			return err
+		}
 		return nil
 	},
 }

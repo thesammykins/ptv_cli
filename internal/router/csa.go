@@ -4,6 +4,7 @@ package router
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -114,6 +115,9 @@ func bestOf(arrival []int64, targets []int) (int, bool) {
 // PlanEarliestArrival finds the journey arriving as early as possible departing
 // at or after depart, from any source stop to any target stop.
 func PlanEarliestArrival(tt *model.Timetable, sources, targets []int, depart time.Time) (*model.Journey, error) {
+	if err := validateInputs(tt, sources, targets); err != nil {
+		return nil, err
+	}
 	r := scan(tt.Connections, tt.Footpaths, len(tt.Stops), sources, depart.Unix(), targets)
 	target, ok := bestOf(r.arrival, targets)
 	if !ok {
@@ -126,6 +130,9 @@ func PlanEarliestArrival(tt *model.Timetable, sources, targets []int, depart tim
 // PlanLatestDeparture finds the journey departing as late as possible while
 // arriving at or before arriveBy.
 func PlanLatestDeparture(tt *model.Timetable, sources, targets []int, arriveBy time.Time) (*model.Journey, error) {
+	if err := validateInputs(tt, sources, targets); err != nil {
+		return nil, err
+	}
 	rev := reverseConnections(tt.Connections)
 	revFoot := reverseFootpaths(tt.Footpaths, len(tt.Stops))
 	// In the reversed graph, search from the targets at -arriveBy.
@@ -137,6 +144,42 @@ func PlanLatestDeparture(tt *model.Timetable, sources, targets []int, arriveBy t
 	legs := reconstruct(tt, rev, r, targets, source)
 	legs = flipLegs(legs)
 	return assemble(legs), nil
+}
+
+func validateInputs(tt *model.Timetable, sources, targets []int) error {
+	if tt == nil {
+		return errors.New("nil timetable")
+	}
+	nStops := len(tt.Stops)
+	if len(sources) == 0 || len(targets) == 0 {
+		return ErrNoJourney
+	}
+	if len(tt.Footpaths) < nStops {
+		return fmt.Errorf("invalid timetable: %d footpath buckets for %d stops", len(tt.Footpaths), nStops)
+	}
+	for _, src := range sources {
+		if src < 0 || src >= nStops {
+			return fmt.Errorf("invalid source stop index %d", src)
+		}
+	}
+	for _, target := range targets {
+		if target < 0 || target >= nStops {
+			return fmt.Errorf("invalid target stop index %d", target)
+		}
+	}
+	for i, c := range tt.Connections {
+		if c.DepStop < 0 || c.DepStop >= nStops || c.ArrStop < 0 || c.ArrStop >= nStops {
+			return fmt.Errorf("invalid connection %d stop index", i)
+		}
+	}
+	for from, fps := range tt.Footpaths[:nStops] {
+		for i, fp := range fps {
+			if fp.ToStop < 0 || fp.ToStop >= nStops {
+				return fmt.Errorf("invalid footpath %d from stop %d", i, from)
+			}
+		}
+	}
+	return nil
 }
 
 // reconstruct rebuilds journey legs from scan data, walking back from target
