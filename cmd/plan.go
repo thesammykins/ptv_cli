@@ -82,14 +82,22 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 			}
 		}
 
+		progress := newProgress()
+		progress.Start()
+
 		tt, err := store.LoadTimetable(queryTime)
 		if err != nil {
+			progress.Stop()
 			return err
 		}
 
 		if !planNoUpdateCheck {
 			rep := gtfs.Freshness(ctx(), store, cfg.GTFSURL, true, false)
-			for _, w := range freshnessWarnings(rep) {
+			warnings := freshnessWarnings(rep)
+			if len(warnings) > 0 {
+				progress.Stop()
+			}
+			for _, w := range warnings {
 				fmt.Fprintln(os.Stderr, render.CleanText(w))
 			}
 		}
@@ -101,10 +109,12 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 
 		sources, fromLabel, err := resolvePlanStops(ctx(), tt, args[0], planRadius, geo)
 		if err != nil {
+			progress.Stop()
 			return fmt.Errorf("origin: %w", err)
 		}
 		targets, toLabel, err := resolvePlanStops(ctx(), tt, args[1], planRadius, geo)
 		if err != nil {
+			progress.Stop()
 			return fmt.Errorf("destination: %w", err)
 		}
 
@@ -115,6 +125,7 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 			journey, err = router.PlanEarliestArrival(tt, sources, targets, queryTime)
 		}
 		if err != nil {
+			progress.Stop()
 			return err
 		}
 
@@ -130,6 +141,7 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 			}
 		}
 
+		progress.Stop()
 		if flagJSON {
 			return printJSON(journey)
 		}
