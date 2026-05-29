@@ -46,6 +46,14 @@ func (s *Store) setMeta(tx *sql.Tx, key, value string) error {
 	return err
 }
 
+// SetMeta writes a single metadata value outside of an ingest transaction
+// (used to record feed provenance and update-check state).
+func (s *Store) SetMeta(key, value string) error {
+	_, err := s.db.Exec(`INSERT INTO meta(key,value) VALUES(?,?)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return err
+}
+
 // Counts returns row counts for the primary tables (for status output).
 func (s *Store) Counts() (map[string]int, error) {
 	out := map[string]int{}

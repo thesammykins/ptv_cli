@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ var (
 	planRadius        float64
 	planNoGeocode     bool
 	planNoDisruptions bool
+	planNoUpdateCheck bool
 )
 
 var planCmd = &cobra.Command{
@@ -84,6 +86,13 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 		tt, err := store.LoadTimetable(queryTime)
 		if err != nil {
 			return err
+		}
+
+		if !planNoUpdateCheck {
+			rep := gtfs.Freshness(ctx(), store, cfg.GTFSURL, true, false)
+			for _, w := range freshnessWarnings(rep) {
+				fmt.Fprintln(os.Stderr, w)
+			}
 		}
 
 		var geo *geocode.Geocoder
@@ -356,5 +365,6 @@ func init() {
 	planCmd.Flags().Float64Var(&planRadius, "radius", 800, "search radius in metres for a lat,lng or geocoded place")
 	planCmd.Flags().BoolVar(&planNoGeocode, "no-geocode", false, "disable place/address geocoding (match local stop names only)")
 	planCmd.Flags().BoolVar(&planNoDisruptions, "no-disruptions", false, "skip the real-time disruptions overlay")
+	planCmd.Flags().BoolVar(&planNoUpdateCheck, "no-update-check", false, "skip the GTFS staleness / upstream-update check")
 	rootCmd.AddCommand(planCmd)
 }

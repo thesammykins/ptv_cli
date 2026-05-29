@@ -16,9 +16,9 @@ import (
 
 // walk transfer generation parameters.
 const (
-	maxTransferMeters  = 250.0 // connect stops within this distance
-	walkMetersPerSec   = 1.3   // ~4.7 km/h
-	gridDegrees        = 0.0025
+	maxTransferMeters = 250.0 // connect stops within this distance
+	walkMetersPerSec  = 1.3   // ~4.7 km/h
+	gridDegrees       = 0.0025
 )
 
 // Ingest parses the GTFS zip-of-zips at zipPath into the store. Existing data

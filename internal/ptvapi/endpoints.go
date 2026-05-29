@@ -10,11 +10,11 @@ import (
 
 // expand option codes used by the departures/pattern endpoints.
 const (
-	ExpandAll       = "0"
-	ExpandStop      = "1"
-	ExpandRoute     = "2"
-	ExpandRun       = "3"
-	ExpandDirection = "4"
+	ExpandAll        = "0"
+	ExpandStop       = "1"
+	ExpandRoute      = "2"
+	ExpandRun        = "3"
+	ExpandDirection  = "4"
 	ExpandDisruption = "5"
 )
 

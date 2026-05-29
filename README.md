@@ -82,12 +82,33 @@ Trip planning needs the PTV GTFS static feed ingested into a local database:
 
 ```sh
 ptv gtfs update     # downloads (~210 MB) and ingests into SQLite
-ptv gtfs status     # shows ingest time and row counts
+ptv gtfs status     # shows ingest time, data age/staleness and row counts
+ptv gtfs check      # asks the endpoint whether a newer feed is available
 ```
 
 The feed is a zip-of-zips (one feed per mode). Stops and routes are namespaced
 `{feedMode}:{id}` to avoid cross-feed collisions, and proximity walk-transfers
 (≤250 m) are generated to connect stops across modes for multi-modal routing.
+
+### Keeping the data fresh
+
+PTV publishes the GTFS feed roughly **weekly**, and each export only contains a
+**rolling ~30 days** of timetable data. If your local copy falls outside that
+window, the planner will simply find no services for the requested date — so it
+pays to stay current.
+
+`ptv` helps in two ways:
+
+- **Staleness warning** — if the local data is older than **7 days** (override
+  with `PTV_GTFS_STALE_DAYS`), `ptv plan` prints a warning to stderr.
+- **Upstream update detection** — `ptv` records the feed's `ETag`/`Last-Modified`
+  on ingest and compares them against the endpoint with a cheap `HEAD` request,
+  **throttled to once per 24h**. `ptv plan` flags when a newer feed is available;
+  `ptv gtfs check` forces an immediate check.
+
+Both checks are **non-blocking** (they only warn) and run during `ptv plan`
+unless you pass `--no-update-check`. Warnings go to **stderr**, so `--json`
+output on stdout stays clean for scripts and agents.
 
 ## Usage
 
@@ -153,6 +174,7 @@ ptv plan --arrive-by 09:00 -- "-37.8183,144.9671" "Camberwell"
 #   --radius <metres>                     search radius for lat,lng / geocoded points
 #   --no-geocode                          match local stop names only (no address lookup)
 #   --no-disruptions                      skip the real-time disruption overlay
+#   --no-update-check                     skip the GTFS staleness / upstream-update check
 ```
 
 `<from>`/`<to>` accept a stop name (prefix/substring matched across all modes,
@@ -201,7 +223,8 @@ scripts and AI agents. Examples:
 ptv plan "Federation Square" "Box Hill" --json   # legs[], disruptions[], per-leg disrupted/disruption_ids
 ptv tram 109 --json                              # route, directions, stops, disruptions
 ptv next "Flinders Street" --mode train --json
-ptv gtfs status --json
+ptv gtfs status --json                           # counts + freshness{} report
+ptv gtfs check --json                            # upstream update check
 ptv version --json
 ```
 

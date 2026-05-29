@@ -69,41 +69,41 @@ type DirectionsResponse struct {
 
 // Departure is a single timetabled/real-time service departure.
 type Departure struct {
-	StopID                int      `json:"stop_id"`
-	RouteID               int      `json:"route_id"`
-	RunID                 int      `json:"run_id"`
-	RunRef                string   `json:"run_ref"`
-	DirectionID           int      `json:"direction_id"`
-	DisruptionIDs         []int64  `json:"disruption_ids"`
-	ScheduledDepartureUTC *string  `json:"scheduled_departure_utc"`
-	EstimatedDepartureUTC *string  `json:"estimated_departure_utc"`
-	AtPlatform            bool     `json:"at_platform"`
-	PlatformNumber        *string  `json:"platform_number"`
-	Flags                 string   `json:"flags"`
-	DepartureSequence     int      `json:"departure_sequence"`
-	DepartureNote         *string  `json:"departure_note"`
+	StopID                int     `json:"stop_id"`
+	RouteID               int     `json:"route_id"`
+	RunID                 int     `json:"run_id"`
+	RunRef                string  `json:"run_ref"`
+	DirectionID           int     `json:"direction_id"`
+	DisruptionIDs         []int64 `json:"disruption_ids"`
+	ScheduledDepartureUTC *string `json:"scheduled_departure_utc"`
+	EstimatedDepartureUTC *string `json:"estimated_departure_utc"`
+	AtPlatform            bool    `json:"at_platform"`
+	PlatformNumber        *string `json:"platform_number"`
+	Flags                 string  `json:"flags"`
+	DepartureSequence     int     `json:"departure_sequence"`
+	DepartureNote         *string `json:"departure_note"`
 }
 
 // Run is an individual trip/service of a route.
 type Run struct {
-	RunID           int    `json:"run_id"`
-	RunRef          string `json:"run_ref"`
-	RouteID         int    `json:"route_id"`
-	RouteType       int    `json:"route_type"`
-	FinalStopID     int    `json:"final_stop_id"`
-	DestinationName string `json:"destination_name"`
-	Status          string `json:"status"`
-	DirectionID     int    `json:"direction_id"`
-	RunSequence     int    `json:"run_sequence"`
-	ExpressStopCount int   `json:"express_stop_count"`
+	RunID            int    `json:"run_id"`
+	RunRef           string `json:"run_ref"`
+	RouteID          int    `json:"route_id"`
+	RouteType        int    `json:"route_type"`
+	FinalStopID      int    `json:"final_stop_id"`
+	DestinationName  string `json:"destination_name"`
+	Status           string `json:"status"`
+	DirectionID      int    `json:"direction_id"`
+	RunSequence      int    `json:"run_sequence"`
+	ExpressStopCount int    `json:"express_stop_count"`
 }
 
 // DisruptionRoute is a route referenced by a disruption.
 type DisruptionRoute struct {
-	RouteType   int    `json:"route_type"`
-	RouteID     int    `json:"route_id"`
-	RouteName   string `json:"route_name"`
-	RouteNumber string `json:"route_number"`
+	RouteType   int                  `json:"route_type"`
+	RouteID     int                  `json:"route_id"`
+	RouteName   string               `json:"route_name"`
+	RouteNumber string               `json:"route_number"`
 	Direction   *DisruptionDirection `json:"direction"`
 }
 
@@ -161,15 +161,15 @@ type StopsByDistanceResponse struct {
 
 // StopDetails carries facility/platform information for a stop.
 type StopDetails struct {
-	StopID        int     `json:"stop_id"`
-	StopName      string  `json:"stop_name"`
-	StopType      string  `json:"stop_type"`
-	RouteType     int     `json:"route_type"`
-	StationType   string  `json:"station_type"`
-	StationDescription string `json:"station_description"`
-	StopLatitude  float64 `json:"stop_latitude"`
-	StopLongitude float64 `json:"stop_longitude"`
-	Routes        []Route `json:"routes"`
+	StopID             int     `json:"stop_id"`
+	StopName           string  `json:"stop_name"`
+	StopType           string  `json:"stop_type"`
+	RouteType          int     `json:"route_type"`
+	StationType        string  `json:"station_type"`
+	StationDescription string  `json:"station_description"`
+	StopLatitude       float64 `json:"stop_latitude"`
+	StopLongitude      float64 `json:"stop_longitude"`
+	Routes             []Route `json:"routes"`
 }
 
 // StopResponse wraps stops/{id}/route_type/{rt}.
@@ -212,9 +212,9 @@ type FareEstimateResponse struct {
 	} `json:"FareEstimateResultStatus"`
 	FareEstimateResult struct {
 		ZoneInfo struct {
-			MinZone        int   `json:"MinZone"`
-			MaxZone        int   `json:"MaxZone"`
-			UniqueZones    []int `json:"UniqueZones"`
+			MinZone     int   `json:"MinZone"`
+			MaxZone     int   `json:"MaxZone"`
+			UniqueZones []int `json:"UniqueZones"`
 		} `json:"ZoneInfo"`
 		PassengerFares []struct {
 			PassengerType    string  `json:"PassengerType"`
