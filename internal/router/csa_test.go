@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elsammykins/ptv_cli/internal/model"
+	"github.com/thesammykins/ptv_cli/internal/model"
 )
 
 // fixture builds a tiny network:
@@ -102,5 +102,116 @@ func TestPlanNoJourney(t *testing.T) {
 	depart := time.Unix(base+60*60, 0)
 	if _, err := PlanEarliestArrival(tt, []int{0}, []int{2}, depart); err != ErrNoJourney {
 		t.Errorf("expected ErrNoJourney, got %v", err)
+	}
+}
+
+func TestPlanEarliestArrivalAllowsEndpointWalking(t *testing.T) {
+	base := time.Date(2025, 1, 1, 8, 0, 0, 0, time.UTC).Unix()
+	tt := &model.Timetable{
+		Stops: []model.Stop{
+			{Index: 0, ID: "s0", Name: "Origin Stop"},
+			{Index: 1, ID: "s1", Name: "Dest"},
+			{Index: 2, ID: "s2", Name: "Nearby Origin"},
+		},
+		Routes:       []model.RouteInfo{{ShortName: "A", RouteType: 2}},
+		TripHeadsign: map[string]string{"A": "to Dest"},
+		Footpaths:    make([][]model.Footpath, 3),
+		Connections: []model.Connection{
+			{DepStop: 0, ArrStop: 1, DepTime: base + 60, ArrTime: base + 10*60, TripID: "A", RouteIdx: 0},
+		},
+	}
+	tt.Footpaths[2] = []model.Footpath{{ToStop: 0, Seconds: 60}}
+
+	j, err := PlanEarliestArrival(tt, []int{2}, []int{1}, time.Unix(base, 0))
+	if err != nil {
+		t.Fatalf("PlanEarliestArrival: %v", err)
+	}
+	if len(j.Legs) != 2 {
+		t.Fatalf("expected walk plus transit, got %d legs", len(j.Legs))
+	}
+	if !j.Legs[0].Walk {
+		t.Fatalf("first leg should be the endpoint walk")
+	}
+	if got, want := j.ArrTime, time.Unix(base+10*60, 0); !got.Equal(want) {
+		t.Fatalf("arrival = %s, want %s", got.UTC(), want.UTC())
+	}
+}
+
+func TestPlanLatestDepartureChoosesLatestValidTrip(t *testing.T) {
+	base := time.Date(2025, 1, 1, 8, 0, 0, 0, time.UTC).Unix()
+	min := func(m int) int64 { return base + int64(m*60) }
+	tt := &model.Timetable{
+		Stops: []model.Stop{
+			{Index: 0, ID: "s0", Name: "Origin"},
+			{Index: 1, ID: "s1", Name: "Dest"},
+		},
+		Routes:       []model.RouteInfo{{ShortName: "A", RouteType: 2}},
+		TripHeadsign: map[string]string{"early": "to Dest", "late": "to Dest"},
+		Footpaths:    make([][]model.Footpath, 2),
+		Connections: []model.Connection{
+			{DepStop: 0, ArrStop: 1, DepTime: min(0), ArrTime: min(10), TripID: "early", RouteIdx: 0},
+			{DepStop: 0, ArrStop: 1, DepTime: min(5), ArrTime: min(15), TripID: "late", RouteIdx: 0},
+		},
+	}
+
+	j, err := PlanLatestDeparture(tt, []int{0}, []int{1}, time.Unix(min(15), 0))
+	if err != nil {
+		t.Fatalf("PlanLatestDeparture: %v", err)
+	}
+	if got, want := j.DepTime, time.Unix(min(5), 0); !got.Equal(want) {
+		t.Fatalf("departure = %s, want %s", got.UTC(), want.UTC())
+	}
+}
+
+func TestPlanEarliestArrivalMissedTransferIsNoJourney(t *testing.T) {
+	base := time.Date(2025, 1, 1, 8, 0, 0, 0, time.UTC).Unix()
+	min := func(m int) int64 { return base + int64(m*60) }
+	tt := &model.Timetable{
+		Stops: []model.Stop{
+			{Index: 0, ID: "s0", Name: "Origin"},
+			{Index: 1, ID: "s1", Name: "Mid"},
+			{Index: 2, ID: "s2", Name: "Dest"},
+		},
+		Routes:       []model.RouteInfo{{ShortName: "A", RouteType: 2}, {ShortName: "B", RouteType: 2}},
+		TripHeadsign: map[string]string{"A": "to Mid", "B": "to Dest"},
+		Footpaths:    make([][]model.Footpath, 3),
+		Connections: []model.Connection{
+			{DepStop: 0, ArrStop: 1, DepTime: min(0), ArrTime: min(5), TripID: "A", RouteIdx: 0},
+			{DepStop: 1, ArrStop: 2, DepTime: min(4), ArrTime: min(10), TripID: "B", RouteIdx: 1},
+		},
+	}
+
+	if _, err := PlanEarliestArrival(tt, []int{0}, []int{2}, time.Unix(base, 0)); err != ErrNoJourney {
+		t.Fatalf("expected ErrNoJourney, got %v", err)
+	}
+}
+
+func TestPlanEarliestArrivalKeepsSameTripAsOneLeg(t *testing.T) {
+	base := time.Date(2025, 1, 1, 8, 0, 0, 0, time.UTC).Unix()
+	min := func(m int) int64 { return base + int64(m*60) }
+	tt := &model.Timetable{
+		Stops: []model.Stop{
+			{Index: 0, ID: "s0", Name: "Origin"},
+			{Index: 1, ID: "s1", Name: "Mid"},
+			{Index: 2, ID: "s2", Name: "Dest"},
+		},
+		Routes:       []model.RouteInfo{{ShortName: "A", RouteType: 2}},
+		TripHeadsign: map[string]string{"A": "to Dest"},
+		Footpaths:    make([][]model.Footpath, 3),
+		Connections: []model.Connection{
+			{DepStop: 0, ArrStop: 1, DepTime: min(0), ArrTime: min(5), TripID: "A", RouteIdx: 0},
+			{DepStop: 1, ArrStop: 2, DepTime: min(5), ArrTime: min(20), TripID: "A", RouteIdx: 0},
+		},
+	}
+
+	j, err := PlanEarliestArrival(tt, []int{0}, []int{2}, time.Unix(base, 0))
+	if err != nil {
+		t.Fatalf("PlanEarliestArrival: %v", err)
+	}
+	if len(j.Legs) != 1 {
+		t.Fatalf("expected same-trip continuation to be one leg, got %d", len(j.Legs))
+	}
+	if j.Legs[0].FromStop.Index != 0 || j.Legs[0].ToStop.Index != 2 {
+		t.Fatalf("leg = %s to %s, want Origin to Dest", j.Legs[0].FromStop.Name, j.Legs[0].ToStop.Name)
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elsammykins/ptv_cli/internal/model"
+	"github.com/thesammykins/ptv_cli/internal/model"
 )
 
 // defaultTransferSeconds is used for GTFS transfers lacking a min time.

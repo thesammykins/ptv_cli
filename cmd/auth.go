@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/elsammykins/ptv_cli/internal/config"
-	"github.com/elsammykins/ptv_cli/internal/credstore"
-	"github.com/elsammykins/ptv_cli/internal/ptvapi"
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/config"
+	"github.com/thesammykins/ptv_cli/internal/credstore"
+	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 	"golang.org/x/term"
 )
 

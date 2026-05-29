@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/elsammykins/ptv_cli/internal/config"
-	"github.com/elsammykins/ptv_cli/internal/gtfs"
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/config"
+	"github.com/thesammykins/ptv_cli/internal/gtfs"
 )
 
 var gtfsKeepZip bool

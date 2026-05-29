@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/elsammykins/ptv_cli/internal/ptvapi"
+	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 )
 
 // resolveRoute resolves a route from a numeric id or a (partial) name.

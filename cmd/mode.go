@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elsammykins/ptv_cli/internal/ptvapi"
-	"github.com/elsammykins/ptv_cli/internal/render"
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/ptvapi"
+	"github.com/thesammykins/ptv_cli/internal/render"
 )
 
 // newModeCommand builds a mode-scoped command (e.g. tram/bus/vline) that gives

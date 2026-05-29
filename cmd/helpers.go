@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/elsammykins/ptv_cli/internal/ptvapi"
+	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 )
 
 // printJSON writes v as indented JSON to stdout.

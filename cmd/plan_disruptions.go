@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/elsammykins/ptv_cli/internal/model"
-	"github.com/elsammykins/ptv_cli/internal/ptvapi"
+	"github.com/thesammykins/ptv_cli/internal/model"
+	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 )
 
 // annotateDisruptions overlays current/planned PTV disruptions onto a planned

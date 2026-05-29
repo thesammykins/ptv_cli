@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/elsammykins/ptv_cli/internal/credstore"
+	"github.com/thesammykins/ptv_cli/internal/credstore"
 )
 
 // CredentialSource identifies where credentials were resolved from.

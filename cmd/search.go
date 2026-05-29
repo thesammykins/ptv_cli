@@ -3,8 +3,8 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/elsammykins/ptv_cli/internal/render"
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/render"
 )
 
 var searchModes []string

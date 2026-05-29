@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elsammykins/ptv_cli/internal/config"
-	"github.com/elsammykins/ptv_cli/internal/geocode"
-	"github.com/elsammykins/ptv_cli/internal/gtfs"
-	"github.com/elsammykins/ptv_cli/internal/model"
-	"github.com/elsammykins/ptv_cli/internal/render"
-	"github.com/elsammykins/ptv_cli/internal/router"
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/config"
+	"github.com/thesammykins/ptv_cli/internal/geocode"
+	"github.com/thesammykins/ptv_cli/internal/gtfs"
+	"github.com/thesammykins/ptv_cli/internal/model"
+	"github.com/thesammykins/ptv_cli/internal/render"
+	"github.com/thesammykins/ptv_cli/internal/router"
 )
 
 var (

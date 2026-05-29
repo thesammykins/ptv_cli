@@ -49,7 +49,7 @@ go build -o ptv .
 # optionally: mv ptv /usr/local/bin/
 ```
 
-Requires Go 1.21+. The journey planner uses a local SQLite database
+Requires Go 1.25+. The journey planner uses a local SQLite database
 (`modernc.org/sqlite`, pure Go — no cgo).
 
 ## Credentials

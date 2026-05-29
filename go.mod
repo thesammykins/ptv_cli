@@ -1,4 +1,4 @@
-module github.com/elsammykins/ptv_cli
+module github.com/thesammykins/ptv_cli
 
 go 1.25.0
 

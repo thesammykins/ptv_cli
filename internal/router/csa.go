@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/elsammykins/ptv_cli/internal/model"
+	"github.com/thesammykins/ptv_cli/internal/model"
 )
 
 // ErrNoJourney indicates no path was found between the stops.
