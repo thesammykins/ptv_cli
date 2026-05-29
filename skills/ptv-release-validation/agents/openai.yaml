@@ -1,0 +1,3 @@
+display_name: PTV Release Validation
+short_description: Validate ptv_cli releases against real auth, GTFS, live API, and README workflows.
+default_prompt: Validate the latest ptv_cli release binary end to end, using a temp data directory and reporting any workflow regressions with reproduction commands.
