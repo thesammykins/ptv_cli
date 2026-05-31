@@ -58,11 +58,14 @@ func New(keyID, apiID string) *Client {
 	}
 }
 
-// FetchVehiclePositions fetches and decodes a GTFS Realtime vehicle positions feed.
-func (c *Client) FetchVehiclePositions(ctx context.Context, feedURL string) (*gtfs.FeedMessage, error) {
-	errs := make([]string, 0, 2)
-	for _, headerName := range []string{"KeyID", "KeyId"} {
-		feed, err := c.fetchVehiclePositions(ctx, feedURL, headerName)
+// Fetch fetches and decodes a GTFS Realtime protobuf feed.
+func (c *Client) Fetch(ctx context.Context, feedURL string) (*gtfs.FeedMessage, error) {
+	if c.keyID == "" {
+		return c.fetch(ctx, feedURL, "")
+	}
+	errs := make([]string, 0, 3)
+	for _, headerName := range []string{"Ocp-Apim-Subscription-Key", "KeyID", "KeyId"} {
+		feed, err := c.fetch(ctx, feedURL, headerName)
 		if err == nil {
 			return feed, nil
 		}
@@ -71,13 +74,20 @@ func (c *Client) FetchVehiclePositions(ctx context.Context, feedURL string) (*gt
 	return nil, fmt.Errorf("%s", strings.Join(errs, "; "))
 }
 
-func (c *Client) fetchVehiclePositions(ctx context.Context, feedURL, headerName string) (*gtfs.FeedMessage, error) {
+// FetchVehiclePositions fetches and decodes a GTFS Realtime vehicle positions feed.
+func (c *Client) FetchVehiclePositions(ctx context.Context, feedURL string) (*gtfs.FeedMessage, error) {
+	return c.Fetch(ctx, feedURL)
+}
+
+func (c *Client) fetch(ctx context.Context, feedURL, headerName string) (*gtfs.FeedMessage, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/x-protobuf")
-	req.Header[headerName] = []string{c.keyID}
+	if headerName != "" {
+		req.Header[headerName] = []string{c.keyID}
+	}
 	if c.apiID != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiID)
 	}
@@ -95,7 +105,13 @@ func (c *Client) fetchVehiclePositions(ctx context.Context, feedURL, headerName 
 	if resp.StatusCode != http.StatusOK {
 		message := strings.TrimSpace(string(body))
 		if message != "" && len(message) <= 300 {
+			if headerName == "" {
+				return nil, fmt.Errorf("unauthenticated request: GTFS Realtime API error (%d): %s", resp.StatusCode, message)
+			}
 			return nil, fmt.Errorf("%s header: GTFS Realtime API error (%d): %s", headerName, resp.StatusCode, message)
+		}
+		if headerName == "" {
+			return nil, fmt.Errorf("unauthenticated request: GTFS Realtime API error (%d)", resp.StatusCode)
 		}
 		return nil, fmt.Errorf("%s header: GTFS Realtime API error (%d)", headerName, resp.StatusCode)
 	}
@@ -121,17 +137,19 @@ func Vehicles(feed *gtfs.FeedMessage) []Vehicle {
 		trip := pos.GetTrip()
 		desc := pos.GetVehicle()
 		vehicle := Vehicle{
-			EntityID:        entity.GetId(),
-			TripID:          trip.GetTripId(),
-			RouteID:         trip.GetRouteId(),
-			StartDate:       trip.GetStartDate(),
-			StartTime:       trip.GetStartTime(),
-			VehicleID:       desc.GetId(),
-			Label:           desc.GetLabel(),
-			LicensePlate:    desc.GetLicensePlate(),
-			StopID:          pos.GetStopId(),
-			CurrentStatus:   pos.GetCurrentStatus().String(),
-			OccupancyStatus: pos.GetOccupancyStatus().String(),
+			EntityID:      entity.GetId(),
+			TripID:        trip.GetTripId(),
+			RouteID:       trip.GetRouteId(),
+			StartDate:     trip.GetStartDate(),
+			StartTime:     trip.GetStartTime(),
+			VehicleID:     desc.GetId(),
+			Label:         desc.GetLabel(),
+			LicensePlate:  desc.GetLicensePlate(),
+			StopID:        pos.GetStopId(),
+			CurrentStatus: pos.GetCurrentStatus().String(),
+		}
+		if pos.OccupancyStatus != nil {
+			vehicle.OccupancyStatus = pos.GetOccupancyStatus().String()
 		}
 		if ts := pos.GetTimestamp(); ts > 0 {
 			vehicle.TimestampUTC = time.Unix(int64(ts), 0).UTC().Format(time.RFC3339)
@@ -173,12 +191,30 @@ func FindByVehicleID(feed *gtfs.FeedMessage, query string) *Vehicle {
 	}
 	for _, vehicle := range Vehicles(feed) {
 		for _, candidate := range []string{vehicle.VehicleID, vehicle.Label, vehicle.LicensePlate} {
-			if normalize(candidate) == query {
+			if vehicleIdentifierMatches(candidate, query) {
 				return &vehicle
 			}
 		}
 	}
 	return nil
+}
+
+func vehicleIdentifierMatches(candidate, query string) bool {
+	candidate = normalize(candidate)
+	if candidate == "" || query == "" {
+		return false
+	}
+	if candidate == query {
+		return true
+	}
+	for _, part := range strings.FieldsFunc(candidate, func(r rune) bool {
+		return r == '-' || r == ' ' || r == ',' || r == '/'
+	}) {
+		if part == query {
+			return true
+		}
+	}
+	return false
 }
 
 func normalize(s string) string {

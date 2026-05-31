@@ -100,15 +100,20 @@ internal/
   Tram descriptors can appear from some stop departure contexts (`Yarra Trams`,
   numeric ids) but route-filtered scans may not expose them. Bus often exposes
   position without an identifying descriptor; V/Line descriptors were not
-  observed in broad sampling. Keep user messages explicit about `last_spotted`
-  vs current service and about external fleet sources being existence/class
-  references, not proof of live PTV visibility.
+  observed in broad sampling. GTFS-R vehicle-position feeds can expose live
+  train/tram/bus/VLine vehicle ids and positions; train labels may be consist
+  strings and should match by component. Keep user messages explicit about
+  `last_spotted` vs current service and about external fleet sources being
+  existence/class references, not proof of live PTV visibility.
 - **Transport Victoria GTFS Realtime is separate from the Timetable API.** It is
   protobuf, uses the Open Data subscription key as a `KeyId`/`KeyID` header plus
-  optional `PTV_OPENDATA_API_ID` bearer token, and has feeds for trip updates,
-  service alerts and vehicle positions across train/tram/bus/VLine. `ptv vehicle`
-  first uses the bus vehicle-position feed for optional bus enrichment and direct
-  bus-id lookup because PTV Timetable API bus descriptors are frequently absent.
+  optional `PTV_OPENDATA_API_ID` bearer token, while some feeds prefer
+  `Ocp-Apim-Subscription-Key`. It has feeds for trip updates, service alerts and
+  vehicle positions across train/tram/bus/VLine. Live testing returned 401 for
+  all unauthenticated feed requests. Use `ptv gtfs realtime` to list or inspect
+  the feed catalog. `ptv vehicle` uses vehicle-position feeds for optional
+  enrichment and direct vehicle lookup because PTV Timetable API descriptors are
+  frequently absent outside Metro trains and some trams.
 
 ## GTFS freshness
 

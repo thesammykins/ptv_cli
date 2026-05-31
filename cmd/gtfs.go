@@ -1,16 +1,22 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
+	gtfsproto "github.com/MobilityData/gtfs-realtime-bindings/golang/gtfs"
 	"github.com/spf13/cobra"
 	"github.com/thesammykins/ptv_cli/internal/gtfs"
+	"github.com/thesammykins/ptv_cli/internal/gtfsrt"
 	"github.com/thesammykins/ptv_cli/internal/render"
 )
 
 var gtfsKeepZip bool
 var gtfsNoUpdateCheck bool
+var gtfsRealtimeAll bool
 
 var gtfsCmd = &cobra.Command{
 	Use:   "gtfs",
@@ -188,6 +194,144 @@ var gtfsCheckCmd = &cobra.Command{
 	},
 }
 
+var gtfsRealtimeCmd = &cobra.Command{
+	Use:   "realtime [feed-id]",
+	Short: "Inspect Transport Victoria GTFS Realtime feeds",
+	Long: `Inspect Transport Victoria Open Data GTFS Realtime feeds.
+
+Without a feed id this lists the known feed catalog. Pass a feed id to fetch and
+decode one protobuf feed, or use --all to fetch every known feed. If
+PTV_OPENDATA_KEY_ID is not configured, ptv tries an unauthenticated request so
+you can verify which feeds are public for your network/account.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+
+		feeds := gtfsrt.Feeds()
+		if len(args) == 0 && !gtfsRealtimeAll {
+			return printRealtimeCatalog(feeds)
+		}
+		if !gtfsRealtimeAll {
+			feed, ok := gtfsrt.FeedByID(args[0])
+			if !ok {
+				return fmt.Errorf("unknown GTFS Realtime feed %q", args[0])
+			}
+			feeds = []gtfsrt.Feed{feed}
+		}
+
+		client := gtfsrt.New(cfg.OpenDataKeyID, cfg.OpenDataAPIID)
+		results := make([]realtimeFeedStatus, 0, len(feeds))
+		for _, feed := range feeds {
+			results = append(results, inspectRealtimeFeed(ctx(), client, feed))
+		}
+		return printRealtimeStatuses(results)
+	},
+}
+
+type gtfsRealtimeFetcher interface {
+	Fetch(ctx context.Context, feedURL string) (*gtfsproto.FeedMessage, error)
+}
+
+type realtimeFeedStatus struct {
+	gtfsrt.Feed
+	OK               bool   `json:"ok"`
+	Error            string `json:"error,omitempty"`
+	GTFSRealtime     string `json:"gtfs_realtime_version,omitempty"`
+	Incrementality   string `json:"incrementality,omitempty"`
+	FeedTimestampUTC string `json:"feed_timestamp_utc,omitempty"`
+	EntityCount      int    `json:"entity_count"`
+	TripUpdateCount  int    `json:"trip_update_count"`
+	VehicleCount     int    `json:"vehicle_count"`
+	AlertCount       int    `json:"alert_count"`
+	DeletedCount     int    `json:"deleted_count"`
+	SampleVehicleID  string `json:"sample_vehicle_id,omitempty"`
+	SampleTripID     string `json:"sample_trip_id,omitempty"`
+}
+
+func inspectRealtimeFeed(ctx context.Context, client gtfsRealtimeFetcher, feed gtfsrt.Feed) realtimeFeedStatus {
+	status := realtimeFeedStatus{Feed: feed}
+	msg, err := client.Fetch(ctx, feed.URL)
+	if err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	status.OK = true
+	header := msg.GetHeader()
+	status.GTFSRealtime = header.GetGtfsRealtimeVersion()
+	status.Incrementality = header.GetIncrementality().String()
+	if ts := header.GetTimestamp(); ts > 0 {
+		status.FeedTimestampUTC = time.Unix(int64(ts), 0).UTC().Format(time.RFC3339)
+	}
+	for _, entity := range msg.GetEntity() {
+		status.EntityCount++
+		if entity.GetIsDeleted() {
+			status.DeletedCount++
+		}
+		if entity.GetTripUpdate() != nil {
+			status.TripUpdateCount++
+		}
+		if entity.GetVehicle() != nil {
+			status.VehicleCount++
+			if status.SampleVehicleID == "" {
+				vehicle := entity.GetVehicle()
+				status.SampleVehicleID = firstNonEmptyString(vehicle.GetVehicle().GetLabel(), vehicle.GetVehicle().GetId(), vehicle.GetVehicle().GetLicensePlate())
+				status.SampleTripID = vehicle.GetTrip().GetTripId()
+			}
+		}
+		if entity.GetAlert() != nil {
+			status.AlertCount++
+		}
+	}
+	return status
+}
+
+func printRealtimeCatalog(feeds []gtfsrt.Feed) error {
+	if flagJSON {
+		return printJSON(map[string]any{"feeds": feeds})
+	}
+	t := render.NewTable("ID", "MODE", "KIND", "URL")
+	for _, feed := range feeds {
+		t.Row(feed.ID, feed.Mode, feed.Kind, feed.URL)
+	}
+	return t.Flush()
+}
+
+func printRealtimeStatuses(results []realtimeFeedStatus) error {
+	if flagJSON {
+		return printJSON(map[string]any{"feeds": results})
+	}
+	t := render.NewTable("ID", "OK", "TIMESTAMP", "ENTITIES", "TRIPS", "VEHICLES", "ALERTS", "SAMPLE", "ERROR")
+	for _, result := range results {
+		t.Row(
+			result.ID,
+			result.OK,
+			result.FeedTimestampUTC,
+			result.EntityCount,
+			result.TripUpdateCount,
+			result.VehicleCount,
+			result.AlertCount,
+			result.SampleVehicleID,
+			shortRealtimeError(result.Error),
+		)
+	}
+	return t.Flush()
+}
+
+func shortRealtimeError(err string) string {
+	if err == "" {
+		return ""
+	}
+	parts := strings.Split(err, ";")
+	last := strings.TrimSpace(parts[len(parts)-1])
+	if len(last) > 90 {
+		return last[:87] + "..."
+	}
+	return last
+}
+
 // freshnessWarnings returns human-readable warning lines for a freshness report
 // (printed to stderr by commands that consume GTFS data).
 func freshnessWarnings(r gtfs.FreshnessReport) []string {
@@ -212,6 +356,7 @@ func ifStale(stale bool) string {
 func init() {
 	gtfsUpdateCmd.Flags().BoolVar(&gtfsKeepZip, "keep-zip", false, "keep the downloaded zip after ingest")
 	gtfsStatusCmd.Flags().BoolVar(&gtfsNoUpdateCheck, "no-update-check", false, "skip the live upstream update check")
-	gtfsCmd.AddCommand(gtfsUpdateCmd, gtfsStatusCmd, gtfsCheckCmd)
+	gtfsRealtimeCmd.Flags().BoolVar(&gtfsRealtimeAll, "all", false, "fetch every known GTFS Realtime feed")
+	gtfsCmd.AddCommand(gtfsUpdateCmd, gtfsStatusCmd, gtfsCheckCmd, gtfsRealtimeCmd)
 	rootCmd.AddCommand(gtfsCmd)
 }
