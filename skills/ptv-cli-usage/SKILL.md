@@ -90,11 +90,13 @@ ptv vehicles BS11ZU --stop Chadstone
 ptv vehicle '17-903--1-Sun12-903738' --stop 11293 --json
 ```
 
-`vehicle` and `vehicles` are aliases. Train and tram lookups primarily depend on
-PTV Timetable API `vehicle_descriptor` data first. Train, tram, bus and V/Line
-physical-id lookup can use Transport Victoria GTFS Realtime vehicle-position
-feeds when `PTV_OPENDATA_KEY_ID` is configured, with `PTV_OPENDATA_API_ID` if
-the account requires the platform bearer token.
+`vehicle` and `vehicles` are aliases. Train and tram lookups can use PTV
+Timetable API `vehicle_descriptor` context, but GTFS Realtime is often the
+better source for physical vehicle identity and position. Train, tram, bus and
+V/Line physical-id lookup uses Transport Victoria GTFS Realtime vehicle-position
+feeds when Open Data credentials are configured with `ptv auth opendata login`,
+`PTV_OPENDATA_KEY_ID`, and `PTV_OPENDATA_API_ID` if the account requires the
+platform bearer token.
 
 ### GTFS Realtime
 
@@ -108,7 +110,9 @@ The catalog command does not require Open Data credentials. Fetching one or all
 feeds may be tried without credentials, but live testing currently returns 401;
 configure `PTV_OPENDATA_KEY_ID`, and `PTV_OPENDATA_API_ID` if the account
 requires the platform bearer token. Use this command to verify feed timestamps
-and entity counts before debugging higher-level live data behavior.
+and entity counts before debugging higher-level live data behavior. `ptv vehicle`
+uses vehicle-position feeds today; `next`, `plan`, and `disruptions` do not yet
+merge GTFS-R trip updates or service alerts.
 
 ### Planning
 

@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSign(t *testing.T) {
@@ -12,6 +13,13 @@ func TestSign(t *testing.T) {
 	want := "F25D107119F54104AB5AC7D74068C579FFD415B3"
 	if got != want {
 		t.Fatalf("sign() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatFareTimeUsesSwaggerUTCFormat(t *testing.T) {
+	tm := time.Date(2026, 5, 31, 16, 53, 44, 0, time.FixedZone("AEST", 10*60*60))
+	if got := formatFareTime(tm); got != "2026-5-31 06:53" {
+		t.Fatalf("formatFareTime() = %q, want %q", got, "2026-5-31 06:53")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // expand option codes used by the departures/pattern endpoints.
@@ -286,14 +287,25 @@ func (c *Client) DisruptionsForStop(ctx context.Context, stopID int) (*Disruptio
 	return &out, nil
 }
 
-// FareEstimate estimates a fare between zones.
-func (c *Client) FareEstimate(ctx context.Context, minZone, maxZone int) (*FareEstimateResponse, error) {
+// FareEstimate estimates a fare between zones for a journey window.
+func (c *Client) FareEstimate(ctx context.Context, minZone, maxZone int, touchOn, touchOff time.Time) (*FareEstimateResponse, error) {
 	var out FareEstimateResponse
 	path := fmt.Sprintf("/v3/fare_estimate/min_zone/%d/max_zone/%d", minZone, maxZone)
-	if err := c.get(ctx, path, nil, &out); err != nil {
+	q := url.Values{}
+	if !touchOn.IsZero() {
+		q.Set("journey_touch_on_utc", formatFareTime(touchOn))
+	}
+	if !touchOff.IsZero() {
+		q.Set("journey_touch_off_utc", formatFareTime(touchOff))
+	}
+	if err := c.get(ctx, path, q, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+func formatFareTime(t time.Time) string {
+	return t.UTC().Format("2006-1-2 15:04")
 }
 
 // Outlets lists myki ticket outlets.

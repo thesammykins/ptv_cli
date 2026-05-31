@@ -50,3 +50,53 @@ func TestVehiclesKeepsPresentOccupancyStatus(t *testing.T) {
 		t.Fatalf("OccupancyStatus = %q, want FULL", vehicles[0].OccupancyStatus)
 	}
 }
+
+func TestVehiclesOmitsAbsentOptionalPositionFields(t *testing.T) {
+	lat := float32(-37.818175)
+	lng := float32(144.966776)
+	feed := &gtfs.FeedMessage{Entity: []*gtfs.FeedEntity{{
+		Id: proto.String("entity-1"),
+		Vehicle: &gtfs.VehiclePosition{
+			Vehicle:  &gtfs.VehicleDescriptor{Id: proto.String("vehicle-1")},
+			Position: &gtfs.Position{Latitude: &lat, Longitude: &lng},
+		},
+	}}}
+
+	vehicles := Vehicles(feed)
+	if vehicles[0].CurrentStatus != "" {
+		t.Fatalf("CurrentStatus = %q, want empty for absent field", vehicles[0].CurrentStatus)
+	}
+	if vehicles[0].Bearing != nil {
+		t.Fatalf("Bearing = %v, want nil for absent field", *vehicles[0].Bearing)
+	}
+	if vehicles[0].Speed != nil {
+		t.Fatalf("Speed = %v, want nil for absent field", *vehicles[0].Speed)
+	}
+}
+
+func TestVehiclesKeepsPresentOptionalPositionFields(t *testing.T) {
+	lat := float32(-37.818175)
+	lng := float32(144.966776)
+	bearing := float32(94)
+	speed := float32(13.5)
+	status := gtfs.VehiclePosition_INCOMING_AT
+	feed := &gtfs.FeedMessage{Entity: []*gtfs.FeedEntity{{
+		Id: proto.String("entity-1"),
+		Vehicle: &gtfs.VehiclePosition{
+			Vehicle:       &gtfs.VehicleDescriptor{Id: proto.String("vehicle-1")},
+			Position:      &gtfs.Position{Latitude: &lat, Longitude: &lng, Bearing: &bearing, Speed: &speed},
+			CurrentStatus: &status,
+		},
+	}}}
+
+	vehicles := Vehicles(feed)
+	if vehicles[0].CurrentStatus != "INCOMING_AT" {
+		t.Fatalf("CurrentStatus = %q, want INCOMING_AT", vehicles[0].CurrentStatus)
+	}
+	if vehicles[0].Bearing == nil || *vehicles[0].Bearing != 94 {
+		t.Fatalf("Bearing = %v, want 94", vehicles[0].Bearing)
+	}
+	if vehicles[0].Speed == nil || *vehicles[0].Speed != 13.5 {
+		t.Fatalf("Speed = %v, want 13.5", vehicles[0].Speed)
+	}
+}

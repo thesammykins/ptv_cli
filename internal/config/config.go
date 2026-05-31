@@ -39,8 +39,6 @@ type Config struct {
 	OpenDataKeyID string
 	// OpenDataAPIID is the optional Transport Victoria Open Data platform API token.
 	OpenDataAPIID string
-	// GTFSRealtimeBusVehiclePositionsURL is the optional GTFS Realtime bus vehicle positions endpoint.
-	GTFSRealtimeBusVehiclePositionsURL string
 	// DataDir is where the local GTFS SQLite database and caches live.
 	DataDir string
 	// CredentialSource records where the credentials were loaded from.
@@ -48,9 +46,8 @@ type Config struct {
 }
 
 const (
-	defaultBaseURL                         = "https://timetableapi.ptv.vic.gov.au"
-	defaultGTFSURL                         = "https://data.ptv.vic.gov.au/downloads/gtfs.zip"
-	defaultGTFSRealtimeBusVehiclePositions = "https://api.opendata.transport.vic.gov.au/opendata/public-transport/gtfs/realtime/v1/bus/vehicle-positions"
+	defaultBaseURL = "https://timetableapi.ptv.vic.gov.au"
+	defaultGTFSURL = "https://data.ptv.vic.gov.au/downloads/gtfs.zip"
 )
 
 // ErrMissingCredentials indicates no credentials were found in any configured
@@ -58,6 +55,8 @@ const (
 var ErrMissingCredentials = errors.New("missing credentials")
 
 var loadKeyring = credstore.Load
+
+var loadOpenDataKeyring = credstore.LoadOpenData
 
 // LoadOptions controls optional configuration sources.
 type LoadOptions struct {
@@ -79,23 +78,40 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 	}
 
 	cfg := &Config{
-		BaseURL:                            firstNonEmpty(os.Getenv("PTV_BASE_URL"), env["PTV_BASE_URL"], defaultBaseURL),
-		GTFSURL:                            firstNonEmpty(os.Getenv("PTV_GTFS_URL"), env["PTV_GTFS_URL"], defaultGTFSURL),
-		OpenDataKeyID:                      firstNonEmpty(os.Getenv("PTV_OPENDATA_KEY_ID"), env["PTV_OPENDATA_KEY_ID"], os.Getenv("PTV_OPENDATA_KEYID"), env["PTV_OPENDATA_KEYID"]),
-		OpenDataAPIID:                      firstNonEmpty(os.Getenv("PTV_OPENDATA_API_ID"), env["PTV_OPENDATA_API_ID"]),
-		GTFSRealtimeBusVehiclePositionsURL: firstNonEmpty(os.Getenv("PTV_GTFSR_BUS_VEHICLE_POSITIONS_URL"), env["PTV_GTFSR_BUS_VEHICLE_POSITIONS_URL"], defaultGTFSRealtimeBusVehiclePositions),
-		DataDir:                            firstNonEmpty(os.Getenv("PTV_DATA_DIR"), env["PTV_DATA_DIR"], defaultDataDir()),
+		BaseURL: firstNonEmpty(os.Getenv("PTV_BASE_URL"), env["PTV_BASE_URL"], defaultBaseURL),
+		GTFSURL: firstNonEmpty(os.Getenv("PTV_GTFS_URL"), env["PTV_GTFS_URL"], defaultGTFSURL),
+		DataDir: firstNonEmpty(os.Getenv("PTV_DATA_DIR"), env["PTV_DATA_DIR"], defaultDataDir()),
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
 	cfg.resolveCredentials(env)
+	cfg.resolveOpenDataCredentials(env)
 
 	if cfg.APIKey == "" || cfg.DevID == "" {
 		return nil, fmt.Errorf("%w: run 'ptv auth login' to store them securely, or set PTV_API_KEY and PTV_API_USERID", ErrMissingCredentials)
 	}
 	return cfg, nil
+}
+
+// OpenDataCredentialsWithOptions resolves optional Transport Victoria Open Data
+// credentials without requiring PTV Timetable API credentials.
+func OpenDataCredentialsWithOptions(opts LoadOptions) (credstore.OpenDataCredentials, error) {
+	env, err := loadEnvFile(opts.EnvFile)
+	if err != nil {
+		return credstore.OpenDataCredentials{}, err
+	}
+	if keyID := firstNonEmpty(os.Getenv("PTV_OPENDATA_KEY_ID"), os.Getenv("PTV_OPENDATA_KEYID")); keyID != "" {
+		return credstore.OpenDataCredentials{KeyID: keyID, APIID: os.Getenv("PTV_OPENDATA_API_ID")}, nil
+	}
+	if creds, err := loadOpenDataKeyring(); err == nil {
+		return creds, nil
+	}
+	if keyID := firstNonEmpty(env["PTV_OPENDATA_KEY_ID"], env["PTV_OPENDATA_KEYID"]); keyID != "" {
+		return credstore.OpenDataCredentials{KeyID: keyID, APIID: env["PTV_OPENDATA_API_ID"]}, nil
+	}
+	return credstore.OpenDataCredentials{}, nil
 }
 
 // resolveCredentials fills in APIKey/DevID using the priority order
@@ -114,6 +130,21 @@ func (c *Config) resolveCredentials(env map[string]string) {
 		return
 	}
 	c.CredentialSource = SourceNone
+}
+
+// resolveOpenDataCredentials fills in optional GTFS Realtime credentials using
+// environment > OS keyring > explicit dotenv.
+func (c *Config) resolveOpenDataCredentials(env map[string]string) {
+	creds, err := OpenDataCredentialsWithOptions(LoadOptions{})
+	if err == nil && creds.KeyID != "" {
+		c.OpenDataKeyID = creds.KeyID
+		c.OpenDataAPIID = creds.APIID
+		return
+	}
+	if keyID := firstNonEmpty(env["PTV_OPENDATA_KEY_ID"], env["PTV_OPENDATA_KEYID"]); keyID != "" {
+		c.OpenDataKeyID = keyID
+		c.OpenDataAPIID = env["PTV_OPENDATA_API_ID"]
+	}
 }
 
 // DefaultBaseURL resolves the API base URL without requiring credentials.
@@ -193,9 +224,6 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := validateHTTPSURL("PTV_GTFS_URL", c.GTFSURL); err != nil {
-		return err
-	}
-	if err := validateHTTPSURL("PTV_GTFSR_BUS_VEHICLE_POSITIONS_URL", c.GTFSRealtimeBusVehiclePositionsURL); err != nil {
 		return err
 	}
 	dataDir, err := validateDataDir(c.DataDir)

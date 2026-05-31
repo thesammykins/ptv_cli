@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -12,9 +13,48 @@ import (
 
 // printJSON writes v as indented JSON to stdout.
 func printJSON(v any) error {
+	cleanJSONStrings(reflect.ValueOf(v))
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+func cleanJSONStrings(v reflect.Value) {
+	if !v.IsValid() {
+		return
+	}
+	if v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return
+		}
+		cleanJSONStrings(v.Elem())
+		return
+	}
+	switch v.Kind() {
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			cleanJSONStrings(v.Field(i))
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			cleanJSONStrings(v.Index(i))
+		}
+	case reflect.Map:
+		for _, key := range v.MapKeys() {
+			item := v.MapIndex(key)
+			if !item.IsValid() {
+				continue
+			}
+			copy := reflect.New(item.Type()).Elem()
+			copy.Set(item)
+			cleanJSONStrings(copy)
+			v.SetMapIndex(key, copy)
+		}
+	case reflect.String:
+		if v.CanSet() {
+			v.SetString(strings.TrimSpace(v.String()))
+		}
+	}
 }
 
 // routeTypeName maps a PTV route_type code to a human label.
@@ -143,4 +183,27 @@ func limitRoutes(routes []ptvapi.Route) []ptvapi.Route {
 		return routes[:flagLimit]
 	}
 	return routes
+}
+
+func limitSearchResult(resp *ptvapi.SearchResult) {
+	if resp == nil || flagLimit <= 0 {
+		return
+	}
+	remaining := flagLimit
+	if len(resp.Stops) > remaining {
+		resp.Stops = resp.Stops[:remaining]
+		resp.Routes = []ptvapi.Route{}
+		resp.Outlets = []ptvapi.ResultOutlet{}
+		return
+	}
+	remaining -= len(resp.Stops)
+	if len(resp.Routes) > remaining {
+		resp.Routes = resp.Routes[:remaining]
+		resp.Outlets = []ptvapi.ResultOutlet{}
+		return
+	}
+	remaining -= len(resp.Routes)
+	if len(resp.Outlets) > remaining {
+		resp.Outlets = resp.Outlets[:remaining]
+	}
 }

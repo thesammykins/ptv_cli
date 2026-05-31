@@ -27,9 +27,10 @@ Show a full view of a %s route: its directions, ordered stops and any active
 disruptions. Pass a route number (e.g. "109") or a route name.
 
 Subcommands:
-  %s lines           list all %s routes
-  %s next "<stop>"   live departures from a stop (scoped to %s)`,
-			short, modeName, use, modeName, use, modeName),
+	%s lines              list all %s routes
+	%s next "<stop>"      live departures from a stop (scoped to %s)
+	%s disruptions        list active %s disruptions`,
+			short, modeName, use, modeName, use, modeName, use, modeName),
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -68,7 +69,22 @@ Subcommands:
 			return runModeNext(client, routeType, joinArgs(args))
 		},
 	}
+	nextSub.Flags().StringVar(&nextRoute, "route", "", "filter to a specific route id or name")
+	nextSub.Flags().StringVar(&nextPlatform, "platform", "", "filter to a specific platform number")
 	cmd.AddCommand(nextSub)
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "disruptions",
+		Short: fmt.Sprintf("List active %s disruptions", modeName),
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, _, err := loadClient()
+			if err != nil {
+				return err
+			}
+			return runDisruptions(client, []int{routeType}, "")
+		},
+	})
 
 	return cmd
 }
@@ -102,8 +118,11 @@ func runModeShow(client *ptvapi.Client, routeType int, query string) error {
 			stopsByDir[strconv.Itoa(d.DirectionID)] = s.Stops
 		}
 		out["stops"] = stopsByDir
+		out["disruptions"] = []ptvapi.Disruption{}
 		if derr == nil {
-			out["disruptions"] = flattenDisruptions(dis)
+			if ds := flattenDisruptions(dis); ds != nil {
+				out["disruptions"] = ds
+			}
 		}
 		return printJSON(out)
 	}
@@ -195,11 +214,21 @@ func runModeNext(client *ptvapi.Client, routeType int, query string) error {
 		MaxResults: orDefault(flagLimit, 8),
 		Expand:     []string{ptvapi.ExpandRoute, ptvapi.ExpandRun, ptvapi.ExpandDirection, ptvapi.ExpandDisruption},
 	}
+	if nextRoute != "" {
+		route, rerr := resolveRouteWithTypes(client, nextRoute, []int{routeType})
+		if rerr != nil {
+			return rerr
+		}
+		opts.RouteID = route.RouteID
+	}
 	resp, err := client.Departures(ctx(), routeType, stop.StopID, opts)
 	if err != nil {
 		return err
 	}
 	deps := resp.Departures
+	if nextPlatform != "" {
+		deps = filterPlatform(deps, nextPlatform)
+	}
 	sort.Slice(deps, func(i, j int) bool {
 		return departureSort(deps[i]) < departureSort(deps[j])
 	})

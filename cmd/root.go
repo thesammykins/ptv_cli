@@ -84,7 +84,7 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "output raw JSON")
-	rootCmd.PersistentFlags().IntVar(&flagLimit, "limit", 0, "limit number of results (0 = API default)")
+	rootCmd.PersistentFlags().IntVar(&flagLimit, "limit", 0, "limit number of displayed results (0 = API default)")
 	rootCmd.PersistentFlags().StringVar(&flagEnv, "env-file", "", "explicit dotenv file to load (not read by default)")
 	rootCmd.SetVersionTemplate("ptv {{.Version}}\n")
 	rootCmd.AddCommand(versionCmd)

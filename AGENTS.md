@@ -68,7 +68,7 @@ internal/
   `&signature=`. Optional Transport Victoria Open Data GTFS-R uses
   `PTV_OPENDATA_KEY_ID` (`PTV_OPENDATA_KEYID` alias accepted) for the
   subscription key, optionally `PTV_OPENDATA_API_ID` for the data platform token,
-  and is not stored by `ptv auth`.
+  and can be stored with `ptv auth opendata login`.
 
 ## Gotchas (read before editing)
 
@@ -113,7 +113,9 @@ internal/
   all unauthenticated feed requests. Use `ptv gtfs realtime` to list or inspect
   the feed catalog. `ptv vehicle` uses vehicle-position feeds for optional
   enrichment and direct vehicle lookup because PTV Timetable API descriptors are
-  frequently absent outside Metro trains and some trams.
+  frequently absent outside Metro trains and some trams. GTFS-R is often the
+  superior source for live vehicle identity/position; `next`, `plan`, and
+  `disruptions` still use Timetable API v3/local static GTFS today.
 
 ## GTFS freshness
 

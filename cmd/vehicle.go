@@ -30,11 +30,12 @@ The argument is treated as a physical vehicle id first. For Metro trains,
 PTV exposes a consist string such as "113M-114M-1357T-1422T-243M-244M";
 you can search either the full consist string or one component such as
 "243M". For trams, PTV may expose the tram number (for example "6059")
-from some departure contexts. For buses, optional Transport Victoria GTFS
-Realtime can match a physical bus id/label or enrich a PTV run_ref when
-PTV_OPENDATA_KEY_ID is configured, with PTV_OPENDATA_API_ID when required by
-your Open Data account. If no vehicle descriptor matches, ptv falls back to
-trying the argument as a PTV run_ref across all route types.
+from some departure contexts. Optional Transport Victoria GTFS Realtime can
+match train, tram, bus and V/Line vehicle ids/labels or enrich a PTV run_ref
+when Open Data credentials are configured with 'ptv auth opendata login' or
+PTV_OPENDATA_KEY_ID, with PTV_OPENDATA_API_ID when required by your Open Data
+account. If no vehicle descriptor matches, ptv falls back to trying the argument
+as a PTV run_ref across all route types.
 
 Recommended usage is to provide where the vehicle was seen:
 
@@ -55,9 +56,9 @@ Shortfalls and caveats:
   * Tram descriptors are context-sensitive: some busy stop departure queries
     expose tram numbers, while route-filtered scans may not.
   * Bus and V/Line descriptors are often absent in the PTV Timetable API. With
-    Transport Victoria GTFS Realtime credentials, bus lookups can also use the
-    official bus vehicle-position feed for vehicle id, trip id, position,
-    occupancy and status.
+    Transport Victoria GTFS Realtime credentials, train/tram/bus/VLine lookups
+    can also use official vehicle-position feeds for vehicle id, trip id,
+    position, occupancy and status.
   * With --stop/--route, earlier departures can produce a "last_spotted"
     result. That means the vehicle appeared in prior PTV departure data for
     that stop/route but does not appear in upcoming departures there now.
@@ -82,7 +83,7 @@ Shortfalls and caveats:
 		if cfg.OpenDataKeyID != "" {
 			result = enrichWithGTFSRealtime(ctx(), gtfsrt.New(cfg.OpenDataKeyID, cfg.OpenDataAPIID), query, result)
 		} else if shouldMentionGTFSRealtimeBus(result) {
-			result.Warnings = append(result.Warnings, "GTFS Realtime bus enrichment skipped; set PTV_OPENDATA_KEY_ID to enable Transport Victoria Open Data vehicle positions")
+			result.Warnings = append(result.Warnings, "GTFS Realtime enrichment skipped; run 'ptv auth opendata login' or set PTV_OPENDATA_KEY_ID to enable Transport Victoria Open Data vehicle positions")
 		}
 		if flagJSON {
 			return printJSON(result)

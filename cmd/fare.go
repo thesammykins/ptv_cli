@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 	"github.com/thesammykins/ptv_cli/internal/render"
 )
 
@@ -27,9 +29,13 @@ var fareCmd = &cobra.Command{
 		if fareMinZone > fareMaxZone {
 			return fmt.Errorf("--min-zone must be less than or equal to --max-zone")
 		}
-		resp, err := client.FareEstimate(ctx(), fareMinZone, fareMaxZone)
+		touchOn := time.Now().UTC()
+		resp, err := client.FareEstimate(ctx(), fareMinZone, fareMaxZone, touchOn, touchOn.Add(2*time.Hour))
 		if err != nil {
 			return err
+		}
+		if fareEstimateAllZero(resp) {
+			return fmt.Errorf("PTV returned a zero fare estimate for zones %d-%d; fare data is unavailable from the API", fareMinZone, fareMaxZone)
 		}
 		if flagJSON {
 			return printJSON(resp)
@@ -48,6 +54,21 @@ var fareCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+func fareEstimateAllZero(resp *ptvapi.FareEstimateResponse) bool {
+	if resp == nil || len(resp.FareEstimateResult.PassengerFares) == 0 {
+		return false
+	}
+	if resp.FareEstimateResult.ZoneInfo.MinZone == 0 && resp.FareEstimateResult.ZoneInfo.MaxZone == 0 {
+		return false
+	}
+	for _, p := range resp.FareEstimateResult.PassengerFares {
+		if p.Fare2HourPeak != 0 || p.Fare2HourOffPeak != 0 || p.FareDailyPeak != 0 || p.FareDailyOffPeak != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func init() {

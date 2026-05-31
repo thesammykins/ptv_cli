@@ -29,9 +29,7 @@ var searchCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		resp.Stops = limitStops(resp.Stops)
-		resp.Routes = limitRoutes(resp.Routes)
-		resp.Outlets = limitOutlets(resp.Outlets)
+		limitSearchResult(resp)
 		if flagJSON {
 			return printJSON(resp)
 		}

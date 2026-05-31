@@ -66,7 +66,7 @@ func TestLoadWithOptionsReadsExplicitEnvFile(t *testing.T) {
 
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"PTV_API_KEY", "PTV_API_USERID", "PTV_BASE_URL", "PTV_GTFS_URL", "PTV_DATA_DIR", "PTV_OPENDATA_KEY_ID", "PTV_OPENDATA_KEYID", "PTV_OPENDATA_API_ID", "PTV_GTFSR_BUS_VEHICLE_POSITIONS_URL"} {
+	for _, key := range []string{"PTV_API_KEY", "PTV_API_USERID", "PTV_BASE_URL", "PTV_GTFS_URL", "PTV_DATA_DIR", "PTV_OPENDATA_KEY_ID", "PTV_OPENDATA_KEYID", "PTV_OPENDATA_API_ID"} {
 		t.Setenv(key, "")
 	}
 }
@@ -74,10 +74,73 @@ func clearConfigEnv(t *testing.T) {
 func withoutKeyring(t *testing.T) {
 	t.Helper()
 	original := loadKeyring
+	originalOpenData := loadOpenDataKeyring
 	loadKeyring = func() (credstore.Credentials, error) {
 		return credstore.Credentials{}, credstore.ErrNotFound
 	}
-	t.Cleanup(func() { loadKeyring = original })
+	loadOpenDataKeyring = func() (credstore.OpenDataCredentials, error) {
+		return credstore.OpenDataCredentials{}, credstore.ErrNotFound
+	}
+	t.Cleanup(func() {
+		loadKeyring = original
+		loadOpenDataKeyring = originalOpenData
+	})
+}
+
+func TestLoadReadsOpenDataCredentialsFromKeyring(t *testing.T) {
+	clearConfigEnv(t)
+	originalKeyring := loadKeyring
+	originalOpenData := loadOpenDataKeyring
+	loadKeyring = func() (credstore.Credentials, error) {
+		return credstore.Credentials{APIKey: "api-key", DevID: "123"}, nil
+	}
+	loadOpenDataKeyring = func() (credstore.OpenDataCredentials, error) {
+		return credstore.OpenDataCredentials{KeyID: "subscription", APIID: "platform-token"}, nil
+	}
+	t.Cleanup(func() {
+		loadKeyring = originalKeyring
+		loadOpenDataKeyring = originalOpenData
+	})
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.OpenDataKeyID != "subscription" {
+		t.Fatalf("OpenDataKeyID = %q, want keyring value", cfg.OpenDataKeyID)
+	}
+	if cfg.OpenDataAPIID != "platform-token" {
+		t.Fatalf("OpenDataAPIID = %q, want keyring value", cfg.OpenDataAPIID)
+	}
+}
+
+func TestOpenDataEnvironmentOverridesKeyring(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("PTV_OPENDATA_KEY_ID", "env-subscription")
+	t.Setenv("PTV_OPENDATA_API_ID", "env-platform-token")
+	originalKeyring := loadKeyring
+	originalOpenData := loadOpenDataKeyring
+	loadKeyring = func() (credstore.Credentials, error) {
+		return credstore.Credentials{APIKey: "api-key", DevID: "123"}, nil
+	}
+	loadOpenDataKeyring = func() (credstore.OpenDataCredentials, error) {
+		return credstore.OpenDataCredentials{KeyID: "keyring-subscription", APIID: "keyring-platform-token"}, nil
+	}
+	t.Cleanup(func() {
+		loadKeyring = originalKeyring
+		loadOpenDataKeyring = originalOpenData
+	})
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.OpenDataKeyID != "env-subscription" {
+		t.Fatalf("OpenDataKeyID = %q, want environment value", cfg.OpenDataKeyID)
+	}
+	if cfg.OpenDataAPIID != "env-platform-token" {
+		t.Fatalf("OpenDataAPIID = %q, want environment value", cfg.OpenDataAPIID)
+	}
 }
 
 func TestLoadRejectsNonHTTPSRemoteURLs(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 
 	gtfsproto "github.com/MobilityData/gtfs-realtime-bindings/golang/gtfs"
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/config"
 	"github.com/thesammykins/ptv_cli/internal/gtfs"
 	"github.com/thesammykins/ptv_cli/internal/gtfsrt"
 	"github.com/thesammykins/ptv_cli/internal/render"
@@ -202,10 +203,11 @@ var gtfsRealtimeCmd = &cobra.Command{
 Without a feed id this lists the known feed catalog. Pass a feed id to fetch and
 decode one protobuf feed, or use --all to fetch every known feed. If
 PTV_OPENDATA_KEY_ID is not configured, ptv tries an unauthenticated request so
-you can verify which feeds are public for your network/account.`,
+you can verify which feeds are public for your network/account. GTFS Realtime
+credentials are resolved independently from PTV Timetable API credentials.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := loadConfig()
+		creds, err := config.OpenDataCredentialsWithOptions(config.LoadOptions{EnvFile: flagEnv})
 		if err != nil {
 			return err
 		}
@@ -222,7 +224,7 @@ you can verify which feeds are public for your network/account.`,
 			feeds = []gtfsrt.Feed{feed}
 		}
 
-		client := gtfsrt.New(cfg.OpenDataKeyID, cfg.OpenDataAPIID)
+		client := gtfsrt.New(creds.KeyID, creds.APIID)
 		results := make([]realtimeFeedStatus, 0, len(feeds))
 		for _, feed := range feeds {
 			results = append(results, inspectRealtimeFeed(ctx(), client, feed))

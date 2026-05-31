@@ -23,7 +23,7 @@ terminal — exclusively for VIC PTV.
   uses is checked for active disruptions and flagged inline.
 - 🚉 Best-effort live vehicle lookup (`ptv vehicle`) from PTV vehicle
   descriptors/positions where the API exposes them, with optional Transport
-  Victoria GTFS Realtime bus enrichment.
+  Victoria GTFS Realtime train, tram, bus and V/Line enrichment.
 - 🚋 Mode-scoped commands `ptv tram`, `ptv bus`, `ptv vline` for a full
   per-route view plus `lines` and `next` subcommands.
 - 🔐 Cross-platform secure credential storage in the OS keyring.
@@ -77,12 +77,15 @@ Credentials are resolved in this order:
 For local development only, pass `--env-file <path>` to load a dotenv file
 explicitly. The CLI does not auto-read `.env` from the working directory.
 
-Optional Transport Victoria Open Data features use a separate subscription key.
-Set it as `PTV_OPENDATA_KEY_ID` in the environment or in an explicit
-`--env-file`; `PTV_OPENDATA_KEYID` is accepted as an alias. If your portal setup
-also exposes a data platform API token, set `PTV_OPENDATA_API_ID` as well. Without
-the subscription key, the core PTV Timetable API features still work; commands
-that can use GTFS Realtime data will print a warning and skip that enrichment.
+Optional Transport Victoria Open Data features use separate credentials from
+the PTV Timetable API. Create an account at
+<https://opendata.transport.vic.gov.au/>, subscribe to the public transport data,
+then set the Open Data subscription key as `PTV_OPENDATA_KEY_ID` in the
+environment or in an explicit `--env-file`; `PTV_OPENDATA_KEYID` is accepted as
+an alias. If the portal also gives you a data platform API token, set it as
+`PTV_OPENDATA_API_ID`. Without these Open Data credentials, the core PTV
+Timetable API features still work; commands that can use GTFS Realtime data will
+print a warning and skip that enrichment.
 
 Store them securely in the OS keyring:
 
@@ -92,6 +95,35 @@ ptv auth status     # shows where credentials are being read from
 ptv auth check      # makes a signed test call
 ptv auth logout     # removes credentials from the keyring
 ```
+
+Open Data credentials can also be stored in the OS keyring, independently from
+the PTV Timetable API credentials:
+
+```sh
+ptv auth opendata login    # prompts for Open Data key/token, verifies GTFS-R
+ptv auth opendata status   # shows whether Open Data credentials are configured
+ptv auth opendata check    # makes a GTFS Realtime test request
+ptv auth opendata logout   # removes stored Open Data credentials
+```
+
+### Which live API should I use?
+
+The PTV Timetable API v3 remains the main source for stop/route lookup,
+departures, runs, disruptions and local journey context. Transport Victoria
+Open Data GTFS Realtime is separate and is often **better for live vehicle
+identity and position** because its vehicle-position feeds cover train, tram,
+bus and V/Line directly and frequently expose vehicle IDs/labels that v3 omits.
+
+Current CLI wiring:
+
+- `ptv vehicle` uses GTFS-R vehicle-position feeds for all four mode groups when
+  Open Data credentials are configured, and can find vehicles even when v3 has no
+  `vehicle_descriptor`.
+- `ptv gtfs realtime` lists and inspects the official GTFS-R trip update,
+  service alert and vehicle-position feeds for debugging or scripting.
+- `ptv next`, `ptv plan` and `ptv disruptions` still use the Timetable API v3
+  and local static GTFS today; GTFS-R trip updates and service alerts are exposed
+  for inspection but are not yet merged into those commands.
 
 > The signature scheme is HMAC-SHA1 over `"{path}?{query-incl-devid}"`, keyed
 > by the API key; the uppercase-hex result is appended as `&signature=`.
@@ -135,9 +167,11 @@ output on stdout stays clean for scripts and agents.
 
 Transport Victoria Open Data also publishes GTFS Realtime protobuf feeds for
 trip updates, vehicle positions and service alerts. Live testing from this repo
-currently returns `401` for unauthenticated feed requests, so configure
-`PTV_OPENDATA_KEY_ID` before fetching. Use `ptv gtfs realtime` to list the known
-feed catalog, or fetch one/all feeds when Open Data credentials are configured:
+currently returns `401` for unauthenticated feed requests, so create an account
+at <https://opendata.transport.vic.gov.au/> and configure `PTV_OPENDATA_KEY_ID`
+before fetching. Some accounts also require `PTV_OPENDATA_API_ID`. Use
+`ptv gtfs realtime` to list the known feed catalog, or fetch one/all feeds when
+Open Data credentials are configured:
 
 ```sh
 ptv gtfs realtime
@@ -145,9 +179,10 @@ ptv --env-file .env gtfs realtime bus-vehicle-positions --json
 ptv --env-file .env gtfs realtime --all
 ```
 
-The command reports feed timestamps and entity counts so new integrations can be
-validated before they are merged into user-facing departure, vehicle or
-disruption commands.
+The command reports feed timestamps and entity counts. `ptv vehicle` already
+uses the vehicle-position feeds; trip updates and service alerts are currently
+available through this inspection command for debugging/scripting and are not yet
+merged into `ptv next`, `ptv plan` or `ptv disruptions`.
 
 ## Usage
 
@@ -189,14 +224,14 @@ Each accepts `--json` for structured output.
 
 ### Vehicle lookup
 
-`ptv vehicle` (alias `ptv vehicles`) is a best-effort lookup using the PTV
-Timetable API, with optional Transport Victoria GTFS Realtime vehicle-position
-enrichment when `PTV_OPENDATA_KEY_ID` is configured. If your Open Data account
-requires the data platform token, set `PTV_OPENDATA_API_ID` as well. The
-Timetable API does not provide a direct "find vehicle by id" endpoint, so the
-command searches expanded departure/run data where PTV includes
-`vehicle_descriptor` and `vehicle_position` on runs, then falls back to GTFS-R
-vehicle-position feeds for train/tram/bus/VLine matches.
+`ptv vehicle` (alias `ptv vehicles`) combines the PTV Timetable API with
+Transport Victoria GTFS Realtime vehicle-position feeds. In practice GTFS-R is
+often the superior source for physical vehicle identity and live position,
+especially for bus and V/Line and for all-mode direct ID lookup. The Timetable
+API does not provide a direct "find vehicle by id" endpoint, so the command first
+uses v3 stop/run context when you provide hints, then uses GTFS-R
+vehicle-position feeds for train/tram/bus/VLine matches when Open Data
+credentials are configured.
 
 ```sh
 # Search a Metro train car/consist component seen at a stop/line.
@@ -240,11 +275,10 @@ What PTV currently exposes in live output:
 
 The Transport Victoria Open Data endpoint is useful beyond vehicle enrichment: it
 also publishes GTFS Realtime trip updates, service alerts and vehicle-position
-feeds for Metro Train, Yarra Trams, Metro & Regional Bus, and V/Line. This CLI
-currently wires in the bus vehicle-position feed first because bus fleet identity
-is the largest PTV Timetable API gap. Future commands can reuse the same optional
-`PTV_OPENDATA_KEY_ID` configuration for train/tram/VLine GTFS-R positions, trip
-updates, and alerts.
+feeds for Metro Train, Yarra Trams, Metro & Regional Bus, and V/Line. `ptv
+vehicle` currently uses the vehicle-position feeds for all four mode groups;
+`ptv gtfs realtime` exposes trip updates and alerts for inspection until they are
+merged into higher-level commands.
 
 Shortfalls:
 

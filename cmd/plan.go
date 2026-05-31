@@ -46,8 +46,11 @@ Examples:
 
 Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 '--' separator so it is not mistaken for a flag.`,
-	Args: cobra.ExactArgs(2),
+	Args: func(cmd *cobra.Command, args []string) error {
+		return cobra.ExactArgs(2)(cmd, planPositionals(args))
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
+		args = planPositionals(args)
 		if planDepart != "" && planArriveBy != "" {
 			return fmt.Errorf("use only one of --depart or --arrive-by")
 		}
@@ -153,6 +156,13 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 		}
 		return nil
 	},
+}
+
+func planPositionals(args []string) []string {
+	if len(args) > 0 && args[0] == "--" {
+		return args[1:]
+	}
+	return args
 }
 
 // orLabel augments the user's query with a resolved place label when geocoding

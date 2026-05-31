@@ -137,16 +137,18 @@ func Vehicles(feed *gtfs.FeedMessage) []Vehicle {
 		trip := pos.GetTrip()
 		desc := pos.GetVehicle()
 		vehicle := Vehicle{
-			EntityID:      entity.GetId(),
-			TripID:        trip.GetTripId(),
-			RouteID:       trip.GetRouteId(),
-			StartDate:     trip.GetStartDate(),
-			StartTime:     trip.GetStartTime(),
-			VehicleID:     desc.GetId(),
-			Label:         desc.GetLabel(),
-			LicensePlate:  desc.GetLicensePlate(),
-			StopID:        pos.GetStopId(),
-			CurrentStatus: pos.GetCurrentStatus().String(),
+			EntityID:     entity.GetId(),
+			TripID:       trip.GetTripId(),
+			RouteID:      trip.GetRouteId(),
+			StartDate:    trip.GetStartDate(),
+			StartTime:    trip.GetStartTime(),
+			VehicleID:    desc.GetId(),
+			Label:        desc.GetLabel(),
+			LicensePlate: desc.GetLicensePlate(),
+			StopID:       pos.GetStopId(),
+		}
+		if pos.CurrentStatus != nil {
+			vehicle.CurrentStatus = pos.GetCurrentStatus().String()
 		}
 		if pos.OccupancyStatus != nil {
 			vehicle.OccupancyStatus = pos.GetOccupancyStatus().String()
@@ -155,14 +157,22 @@ func Vehicles(feed *gtfs.FeedMessage) []Vehicle {
 			vehicle.TimestampUTC = time.Unix(int64(ts), 0).UTC().Format(time.RFC3339)
 		}
 		if p := pos.GetPosition(); p != nil {
-			lat := float64(p.GetLatitude())
-			lng := float64(p.GetLongitude())
-			bearing := float64(p.GetBearing())
-			speed := float64(p.GetSpeed())
-			vehicle.Latitude = &lat
-			vehicle.Longitude = &lng
-			vehicle.Bearing = &bearing
-			vehicle.Speed = &speed
+			if p.Latitude != nil {
+				lat := float64(p.GetLatitude())
+				vehicle.Latitude = &lat
+			}
+			if p.Longitude != nil {
+				lng := float64(p.GetLongitude())
+				vehicle.Longitude = &lng
+			}
+			if p.Bearing != nil {
+				bearing := float64(p.GetBearing())
+				vehicle.Bearing = &bearing
+			}
+			if p.Speed != nil {
+				speed := float64(p.GetSpeed())
+				vehicle.Speed = &speed
+			}
 		}
 		vehicles = append(vehicles, vehicle)
 	}

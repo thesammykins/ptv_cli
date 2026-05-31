@@ -23,56 +23,60 @@ var disruptionsCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-
-		var resp *ptvapi.DisruptionsResponse
-		if disruptionsRoute != "" {
-			route, rerr := resolveRoute(client, disruptionsRoute)
-			if rerr != nil {
-				return rerr
-			}
-			resp, err = client.DisruptionsForRoute(ctx(), route.RouteID)
-		} else {
-			routeTypes, terr := modesToTypes(disruptionsModes)
-			if terr != nil {
-				return terr
-			}
-			resp, err = client.DisruptionsAll(ctx(), routeTypes)
+		routeTypes, terr := modesToTypes(disruptionsModes)
+		if terr != nil {
+			return terr
 		}
-		if err != nil {
+		return runDisruptions(client, routeTypes, disruptionsRoute)
+	},
+}
+
+func runDisruptions(client *ptvapi.Client, routeTypes []int, routeQuery string) error {
+	var resp *ptvapi.DisruptionsResponse
+	var err error
+	if routeQuery != "" {
+		route, rerr := resolveRouteWithTypes(client, routeQuery, routeTypes)
+		if rerr != nil {
+			return rerr
+		}
+		resp, err = client.DisruptionsForRoute(ctx(), route.RouteID)
+	} else {
+		resp, err = client.DisruptionsAll(ctx(), routeTypes)
+	}
+	if err != nil {
+		return err
+	}
+	resp.Disruptions = limitDisruptionMap(resp.Disruptions)
+	if flagJSON {
+		return printJSON(resp)
+	}
+
+	modes := make([]string, 0, len(resp.Disruptions))
+	for m := range resp.Disruptions {
+		modes = append(modes, m)
+	}
+	sort.Strings(modes)
+
+	total := 0
+	for _, m := range modes {
+		items := resp.Disruptions[m]
+		if len(items) == 0 {
+			continue
+		}
+		fmt.Printf("\n%s\n", render.CleanText(m))
+		t := render.NewTable("STATUS", "TITLE")
+		for _, d := range items {
+			t.Row(d.DisruptionStatus, d.Title)
+			total++
+		}
+		if err := t.Flush(); err != nil {
 			return err
 		}
-		resp.Disruptions = limitDisruptionMap(resp.Disruptions)
-		if flagJSON {
-			return printJSON(resp)
-		}
-
-		modes := make([]string, 0, len(resp.Disruptions))
-		for m := range resp.Disruptions {
-			modes = append(modes, m)
-		}
-		sort.Strings(modes)
-
-		total := 0
-		for _, m := range modes {
-			items := resp.Disruptions[m]
-			if len(items) == 0 {
-				continue
-			}
-			fmt.Printf("\n%s\n", render.CleanText(m))
-			t := render.NewTable("STATUS", "TITLE")
-			for _, d := range items {
-				t.Row(d.DisruptionStatus, d.Title)
-				total++
-			}
-			if err := t.Flush(); err != nil {
-				return err
-			}
-		}
-		if total == 0 {
-			fmt.Println("No disruptions.")
-		}
-		return nil
-	},
+	}
+	if total == 0 {
+		fmt.Println("No disruptions.")
+	}
+	return nil
 }
 
 func init() {

@@ -136,6 +136,23 @@ func TestGTFSRealtimeCatalogJSON(t *testing.T) {
 	}
 }
 
+func TestGTFSRealtimeCatalogDoesNotRequireTimetableCredentials(t *testing.T) {
+	for _, key := range []string{"PTV_API_KEY", "PTV_API_USERID"} {
+		t.Setenv(key, "")
+	}
+
+	stdout, stderr, err := executeCommand(t, "--json", "gtfs", "realtime")
+	if err != nil {
+		t.Fatalf("gtfs realtime --json without timetable credentials: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "metro-trip-updates") {
+		t.Fatalf("stdout missing feed catalog: %s", stdout)
+	}
+}
+
 func TestAuthStatusPropagatesInvalidConfig(t *testing.T) {
 	t.Setenv("PTV_BASE_URL", "http://example.com")
 	stdout, stderr, err := executeCommand(t, "auth", "status")

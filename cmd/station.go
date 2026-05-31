@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
@@ -42,6 +44,13 @@ var stationCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if resp.Stop.StopLatitude == 0 && resp.Stop.StopLongitude == 0 {
+			resp.Stop.StopLatitude = stop.StopLatitude
+			resp.Stop.StopLongitude = stop.StopLongitude
+		}
+		if resp.Stop.StopLatitude == 0 && resp.Stop.StopLongitude == 0 {
+			fillStationCoordinates(ctx(), client, &resp.Stop)
+		}
 		if flagJSON {
 			return printJSON(resp)
 		}
@@ -75,6 +84,31 @@ var stationCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+func fillStationCoordinates(ctx context.Context, client *ptvapi.Client, stop *ptvapi.StopDetails) {
+	name := strings.TrimSpace(stop.StopName)
+	if name == "" {
+		return
+	}
+	resp, err := client.Search(ctx, name, []int{stop.RouteType})
+	if err != nil {
+		return
+	}
+	for _, candidate := range resp.Stops {
+		if candidate.StopID == stop.StopID && (candidate.StopLatitude != 0 || candidate.StopLongitude != 0) {
+			stop.StopLatitude = candidate.StopLatitude
+			stop.StopLongitude = candidate.StopLongitude
+			return
+		}
+	}
+	for _, candidate := range resp.Stops {
+		if strings.EqualFold(strings.TrimSpace(candidate.StopName), name) && (candidate.StopLatitude != 0 || candidate.StopLongitude != 0) {
+			stop.StopLatitude = candidate.StopLatitude
+			stop.StopLongitude = candidate.StopLongitude
+			return
+		}
+	}
 }
 
 // deduplicateRoutes removes duplicate routes by route_id, keeping the first
