@@ -18,7 +18,6 @@ func TestVehicleIdentifierMatchesExactOnlyForPlainIDs(t *testing.T) {
 		t.Fatal("unexpected partial plain id match")
 	}
 }
-
 func TestVehiclesOmitsAbsentOccupancyStatus(t *testing.T) {
 	feed := &gtfs.FeedMessage{Entity: []*gtfs.FeedEntity{{
 		Id: proto.String("entity-1"),
