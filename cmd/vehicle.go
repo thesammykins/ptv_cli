@@ -80,7 +80,7 @@ Shortfalls and caveats:
 			return err
 		}
 		if cfg.OpenDataKeyID != "" {
-			result = enrichWithGTFSRealtimeBus(ctx(), gtfsrt.New(cfg.OpenDataKeyID, cfg.OpenDataAPIID), cfg.GTFSRealtimeBusVehiclePositionsURL, query, result)
+			result = enrichWithGTFSRealtime(ctx(), gtfsrt.New(cfg.OpenDataKeyID, cfg.OpenDataAPIID), query, result)
 		} else if shouldMentionGTFSRealtimeBus(result) {
 			result.Warnings = append(result.Warnings, "GTFS Realtime bus enrichment skipped; set PTV_OPENDATA_KEY_ID to enable Transport Victoria Open Data vehicle positions")
 		}
@@ -232,33 +232,107 @@ func lookupVehicle(ctx context.Context, client vehicleLookupClient, query string
 	}, nil
 }
 
-func enrichWithGTFSRealtimeBus(ctx context.Context, client gtfsRealtimeVehicleClient, feedURL, query string, result *vehicleResult) *vehicleResult {
-	if result == nil || !shouldMentionGTFSRealtimeBus(result) {
-		return result
-	}
-	feed, err := client.FetchVehiclePositions(ctx, feedURL)
-	if err != nil {
-		result.Warnings = append(result.Warnings, "GTFS Realtime bus enrichment failed: "+err.Error())
+func enrichWithGTFSRealtime(ctx context.Context, client gtfsRealtimeVehicleClient, query string, result *vehicleResult) *vehicleResult {
+	if result == nil || !shouldMentionGTFSRealtime(result) {
 		return result
 	}
 
-	var vehicle *gtfsrt.Vehicle
-	if result.RunRef != "" {
-		vehicle = gtfsrt.FindByRunRef(feed, result.RunRef)
-	}
-	if vehicle == nil {
-		vehicle = gtfsrt.FindByVehicleID(feed, query)
-	}
-	if vehicle == nil {
-		result.Warnings = append(result.Warnings, "GTFS Realtime bus feed did not expose a matching vehicle position")
-		return result
+	var errors []string
+	for _, source := range vehicleRealtimeSources(result) {
+		feed, err := client.FetchVehiclePositions(ctx, source.Feed.URL)
+		if err != nil {
+			errors = append(errors, source.Feed.ID+": "+err.Error())
+			continue
+		}
+
+		var vehicle *gtfsrt.Vehicle
+		if result.RunRef != "" {
+			vehicle = gtfsrt.FindByRunRef(feed, result.RunRef)
+		}
+		if vehicle == nil {
+			vehicle = gtfsrt.FindByVehicleID(feed, query)
+		}
+		if vehicle == nil {
+			continue
+		}
+		return applyGTFSRealtimeVehicle(result, source, *vehicle)
 	}
 
-	result.GTFSRealtime = gtfsRealtimeFromVehicle(*vehicle)
+	if len(errors) > 0 {
+		result.Warnings = append(result.Warnings, "GTFS Realtime vehicle enrichment failed: "+strings.Join(errors, "; "))
+		return result
+	}
+	if result.MatchedBy == "none" {
+		result.Warnings = append(result.Warnings, "GTFS Realtime vehicle-position feeds did not expose a matching vehicle")
+	} else if result.RouteType != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("GTFS Realtime %s vehicle-position feed did not expose a matching vehicle", strings.ToLower(routeTypeName(*result.RouteType))))
+	}
+	return result
+}
+
+type realtimeVehicleSource struct {
+	Feed      gtfsrt.Feed
+	RouteType int
+	Mode      string
+}
+
+func vehicleRealtimeSources(result *vehicleResult) []realtimeVehicleSource {
+	sources := allVehicleRealtimeSources()
+	if result == nil || result.RouteType == nil {
+		return sources
+	}
+	filtered := sources[:0]
+	for _, source := range sources {
+		if source.RouteType == *result.RouteType {
+			filtered = append(filtered, source)
+		}
+	}
+	if len(filtered) > 0 {
+		return filtered
+	}
+	return sources
+}
+
+func allVehicleRealtimeSources() []realtimeVehicleSource {
+	var sources []realtimeVehicleSource
+	for _, feed := range gtfsrt.Feeds() {
+		if feed.Kind != gtfsrt.FeedKindVehiclePositions {
+			continue
+		}
+		routeType, ok := realtimeFeedRouteType(feed)
+		if !ok {
+			continue
+		}
+		sources = append(sources, realtimeVehicleSource{
+			Feed:      feed,
+			RouteType: routeType,
+			Mode:      routeTypeName(routeType),
+		})
+	}
+	return sources
+}
+
+func realtimeFeedRouteType(feed gtfsrt.Feed) (int, bool) {
+	switch feed.ID {
+	case "metro-vehicle-positions":
+		return 0, true
+	case "tram-vehicle-positions":
+		return 1, true
+	case "bus-vehicle-positions":
+		return 2, true
+	case "vline-vehicle-positions":
+		return 3, true
+	default:
+		return 0, false
+	}
+}
+
+func applyGTFSRealtimeVehicle(result *vehicleResult, source realtimeVehicleSource, vehicle gtfsrt.Vehicle) *vehicleResult {
+	result.GTFSRealtime = gtfsRealtimeFromVehicle(source.Feed, vehicle)
 	if result.MatchedBy == "none" {
 		result.MatchedBy = "gtfs_realtime.vehicle"
-		result.RouteType = intPtr(2)
-		result.Mode = routeTypeName(2)
+		result.RouteType = intPtr(source.RouteType)
+		result.Mode = source.Mode
 		result.RunRef = vehicle.TripID
 		result.Route = vehicle.RouteID
 		result.ServiceState = "current"
@@ -267,12 +341,28 @@ func enrichWithGTFSRealtimeBus(ctx context.Context, client gtfsRealtimeVehicleCl
 	}
 	if result.Position == nil && result.GTFSRealtime.Position != nil {
 		result.Position = result.GTFSRealtime.Position
-		result.PositionSource = "GTFS Realtime bus vehicle position"
+		result.PositionSource = source.Feed.Title
 	}
 	if result.VehicleID == "" {
 		result.VehicleID = firstNonEmptyString(vehicle.Label, vehicle.VehicleID, vehicle.LicensePlate)
 	}
 	return result
+}
+
+func shouldMentionGTFSRealtime(result *vehicleResult) bool {
+	if result == nil {
+		return false
+	}
+	if result.MatchedBy == "none" {
+		return true
+	}
+	if result.RouteType != nil {
+		switch *result.RouteType {
+		case 0, 1, 2, 3:
+			return true
+		}
+	}
+	return false
 }
 
 func shouldMentionGTFSRealtimeBus(result *vehicleResult) bool {
@@ -285,9 +375,9 @@ func shouldMentionGTFSRealtimeBus(result *vehicleResult) bool {
 	return result.MatchedBy == "none"
 }
 
-func gtfsRealtimeFromVehicle(vehicle gtfsrt.Vehicle) *vehicleGTFSRealtime {
+func gtfsRealtimeFromVehicle(feed gtfsrt.Feed, vehicle gtfsrt.Vehicle) *vehicleGTFSRealtime {
 	result := &vehicleGTFSRealtime{
-		Source:          "Transport Victoria GTFS Realtime bus vehicle positions",
+		Source:          feed.Title,
 		EntityID:        vehicle.EntityID,
 		TripID:          vehicle.TripID,
 		RouteID:         vehicle.RouteID,
@@ -307,7 +397,7 @@ func gtfsRealtimeFromVehicle(vehicle gtfsrt.Vehicle) *vehicleGTFSRealtime {
 			Longitude:   vehicle.Longitude,
 			Bearing:     vehicle.Bearing,
 			DatetimeUTC: vehicle.TimestampUTC,
-			Kind:        "gps",
+			Kind:        "gtfs_realtime_vehicle_position",
 		}
 	}
 	return result

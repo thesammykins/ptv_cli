@@ -8,6 +8,7 @@ import (
 	"time"
 
 	gtfs "github.com/MobilityData/gtfs-realtime-bindings/golang/gtfs"
+	"github.com/thesammykins/ptv_cli/internal/gtfsrt"
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 	"google.golang.org/protobuf/proto"
 )
@@ -22,13 +23,20 @@ type fakeVehicleClient struct {
 }
 
 type fakeGTFSRealtimeVehicleClient struct {
-	feed *gtfs.FeedMessage
-	err  error
+	feeds map[string]*gtfs.FeedMessage
+	feed  *gtfs.FeedMessage
+	err   error
 }
 
-func (f *fakeGTFSRealtimeVehicleClient) FetchVehiclePositions(context.Context, string) (*gtfs.FeedMessage, error) {
+func (f *fakeGTFSRealtimeVehicleClient) FetchVehiclePositions(_ context.Context, feedURL string) (*gtfs.FeedMessage, error) {
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.feeds != nil {
+		if feed, ok := f.feeds[feedURL]; ok {
+			return feed, nil
+		}
+		return &gtfs.FeedMessage{}, nil
 	}
 	return f.feed, nil
 }
@@ -332,8 +340,12 @@ func TestEnrichWithGTFSRealtimeBusMatchesRunRef(t *testing.T) {
 		},
 	}}}
 	result := &vehicleResult{RouteType: intPtr(2), RouteID: 15789, RunRef: "17-903--1-Sun12-903738"}
+	busFeed, ok := gtfsrt.FeedByID("bus-vehicle-positions")
+	if !ok {
+		t.Fatal("missing bus-vehicle-positions feed")
+	}
 
-	got := enrichWithGTFSRealtimeBus(context.Background(), &fakeGTFSRealtimeVehicleClient{feed: feed}, "unused", "ignored", result)
+	got := enrichWithGTFSRealtime(context.Background(), &fakeGTFSRealtimeVehicleClient{feeds: map[string]*gtfs.FeedMessage{busFeed.URL: feed}}, "ignored", result)
 
 	if got.GTFSRealtime == nil {
 		t.Fatal("GTFSRealtime is nil")
@@ -344,7 +356,7 @@ func TestEnrichWithGTFSRealtimeBusMatchesRunRef(t *testing.T) {
 	if got.Position == nil || got.Position.Latitude == nil || *got.Position.Latitude == 0 {
 		t.Fatalf("position not attached: %+v", got.Position)
 	}
-	if got.PositionSource != "GTFS Realtime bus vehicle position" {
+	if got.PositionSource != "Metro and regional bus vehicle positions" {
 		t.Fatalf("PositionSource = %q", got.PositionSource)
 	}
 }
@@ -364,8 +376,12 @@ func TestEnrichWithGTFSRealtimeBusMatchesVehicleID(t *testing.T) {
 		},
 	}}}
 	result := &vehicleResult{Query: "fleet-777", MatchedBy: "none"}
+	busFeed, ok := gtfsrt.FeedByID("bus-vehicle-positions")
+	if !ok {
+		t.Fatal("missing bus-vehicle-positions feed")
+	}
 
-	got := enrichWithGTFSRealtimeBus(context.Background(), &fakeGTFSRealtimeVehicleClient{feed: feed}, "unused", "fleet-777", result)
+	got := enrichWithGTFSRealtime(context.Background(), &fakeGTFSRealtimeVehicleClient{feeds: map[string]*gtfs.FeedMessage{busFeed.URL: feed}}, "fleet-777", result)
 
 	if got.GTFSRealtime == nil || got.GTFSRealtime.VehicleID != "fleet-777" {
 		t.Fatalf("unexpected GTFSRealtime: %+v", got.GTFSRealtime)
@@ -373,11 +389,40 @@ func TestEnrichWithGTFSRealtimeBusMatchesVehicleID(t *testing.T) {
 	if got.MatchedBy != "gtfs_realtime.vehicle" || got.Mode != "Bus" || got.RunRef != "trip-1" {
 		t.Fatalf("GTFS-R match did not promote result: %+v", got)
 	}
-	if got.Position == nil || got.PositionSource != "GTFS Realtime bus vehicle position" {
+	if got.Position == nil || got.PositionSource != "Metro and regional bus vehicle positions" {
 		t.Fatalf("GTFS-R position not promoted: %+v", got)
 	}
 	if len(got.Warnings) != 0 {
 		t.Fatalf("warnings = %v, want none", got.Warnings)
+	}
+}
+
+func TestEnrichWithGTFSRealtimeMatchesTrainVehicleID(t *testing.T) {
+	lat := float32(-37.818175)
+	lng := float32(144.966776)
+	feed := &gtfs.FeedMessage{Entity: []*gtfs.FeedEntity{{
+		Id: proto.String("train-entity"),
+		Vehicle: &gtfs.VehiclePosition{
+			Trip: &gtfs.TripDescriptor{TripId: proto.String("train-trip"), RouteId: proto.String("2-WER")},
+			Vehicle: &gtfs.VehicleDescriptor{
+				Label: proto.String("931M"),
+			},
+			Position: &gtfs.Position{Latitude: &lat, Longitude: &lng},
+		},
+	}}}
+	trainFeed, ok := gtfsrt.FeedByID("metro-vehicle-positions")
+	if !ok {
+		t.Fatal("missing metro-vehicle-positions feed")
+	}
+	result := &vehicleResult{Query: "931M", MatchedBy: "none"}
+
+	got := enrichWithGTFSRealtime(context.Background(), &fakeGTFSRealtimeVehicleClient{feeds: map[string]*gtfs.FeedMessage{trainFeed.URL: feed}}, "931M", result)
+
+	if got.MatchedBy != "gtfs_realtime.vehicle" || got.Mode != "Train" || got.VehicleID != "931M" {
+		t.Fatalf("unexpected GTFS-R train result: %+v", got)
+	}
+	if got.PositionSource != "Metro Train vehicle positions" {
+		t.Fatalf("PositionSource = %q", got.PositionSource)
 	}
 }
 

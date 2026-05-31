@@ -45,6 +45,14 @@ sudo mv ptv /usr/local/bin/
 ptv version
 ```
 
+macOS release binaries are not yet Developer ID signed/notarized. If Gatekeeper
+blocks a downloaded `ptv` binary, remove the quarantine attribute after you have
+verified the release archive/checksum:
+
+```sh
+xattr -d com.apple.quarantine /usr/local/bin/ptv
+```
+
 ### Build from source
 
 ```sh
@@ -96,6 +104,7 @@ Trip planning needs the PTV GTFS static feed ingested into a local database:
 ptv gtfs update     # downloads (~210 MB) and ingests into SQLite
 ptv gtfs status     # shows ingest time, data age/staleness and row counts
 ptv gtfs check      # asks the endpoint whether a newer feed is available
+ptv gtfs realtime   # list Transport Victoria GTFS Realtime feeds
 ```
 
 The feed is a zip-of-zips (one feed per mode). Stops and routes are namespaced
@@ -121,6 +130,24 @@ pays to stay current.
 Both checks are **non-blocking** (they only warn) and run during `ptv plan`
 unless you pass `--no-update-check`. Warnings go to **stderr**, so `--json`
 output on stdout stays clean for scripts and agents.
+
+### GTFS Realtime feeds
+
+Transport Victoria Open Data also publishes GTFS Realtime protobuf feeds for
+trip updates, vehicle positions and service alerts. Live testing from this repo
+currently returns `401` for unauthenticated feed requests, so configure
+`PTV_OPENDATA_KEY_ID` before fetching. Use `ptv gtfs realtime` to list the known
+feed catalog, or fetch one/all feeds when Open Data credentials are configured:
+
+```sh
+ptv gtfs realtime
+ptv --env-file .env gtfs realtime bus-vehicle-positions --json
+ptv --env-file .env gtfs realtime --all
+```
+
+The command reports feed timestamps and entity counts so new integrations can be
+validated before they are merged into user-facing departure, vehicle or
+disruption commands.
 
 ## Usage
 
@@ -163,12 +190,13 @@ Each accepts `--json` for structured output.
 ### Vehicle lookup
 
 `ptv vehicle` (alias `ptv vehicles`) is a best-effort lookup using the PTV
-Timetable API, with optional Transport Victoria GTFS Realtime bus
-vehicle-position enrichment when `PTV_OPENDATA_KEY_ID` is configured. If your
-Open Data account requires the data platform token, set `PTV_OPENDATA_API_ID` as
-well. The Timetable API does not provide a direct "find vehicle by id" endpoint,
-so the command searches expanded departure/run data where PTV includes
-`vehicle_descriptor` and `vehicle_position` on runs.
+Timetable API, with optional Transport Victoria GTFS Realtime vehicle-position
+enrichment when `PTV_OPENDATA_KEY_ID` is configured. If your Open Data account
+requires the data platform token, set `PTV_OPENDATA_API_ID` as well. The
+Timetable API does not provide a direct "find vehicle by id" endpoint, so the
+command searches expanded departure/run data where PTV includes
+`vehicle_descriptor` and `vehicle_position` on runs, then falls back to GTFS-R
+vehicle-position feeds for train/tram/bus/VLine matches.
 
 ```sh
 # Search a Metro train car/consist component seen at a stop/line.
@@ -180,11 +208,14 @@ ptv vehicle 6059 --stop "Melbourne Central Station"
 # Treat the argument as a PTV run_ref if no physical vehicle id is found.
 ptv vehicle 952377 --json
 
-# Enable optional GTFS Realtime bus enrichment from an explicit env file.
+# Enable optional GTFS Realtime enrichment from an explicit env file.
 ptv --env-file .env vehicle '17-903--1-Sun12-903738' --stop 11293
 
 # Search a physical bus id from the GTFS Realtime vehicle-position feed.
 ptv --env-file .env vehicles BS11ZU --stop Chadstone
+
+# Search a train consist component from the GTFS Realtime vehicle-position feed.
+ptv --env-file .env vehicle 381M
 
 # Slow fallback: scan a bounded number of active route runs.
 ptv vehicle 243M --scan-routes 20
@@ -200,14 +231,14 @@ What PTV currently exposes in live output:
 - Trams: some stop departure contexts expose `vehicle_descriptor.operator` as
   `Yarra Trams` and a numeric `vehicle_descriptor.id` such as `6059`; the
   description is often blank and route-filtered scans may not expose it.
-- Buses: sampled runs often expose `vehicle_position` GPS, but identifying
-  `vehicle_descriptor` fields are frequently absent. With `PTV_OPENDATA_KEY_ID`,
-  `ptv vehicle` also checks the official GTFS Realtime Metro & Regional Bus
-  vehicle-position feed for a matching `run_ref`/trip id or bus vehicle id/label,
-  and can return GTFS-R position, occupancy and status directly for bus ids.
-- V/Line: no `vehicle_descriptor` data was observed in broad live sampling.
+- GTFS Realtime: with `PTV_OPENDATA_KEY_ID`, `ptv vehicle` checks the official
+  train, tram, bus and V/Line vehicle-position feeds for matching `run_ref`/trip
+  ids, exact vehicle ids/labels, and consist components. It can return GTFS-R
+  position, occupancy and status directly when PTV descriptors are absent.
+- V/Line: no Timetable API `vehicle_descriptor` data was observed in broad live
+  sampling, but GTFS-R vehicle positions expose live V/Line vehicle ids.
 
-The Transport Victoria Open Data endpoint is useful beyond bus enrichment: it
+The Transport Victoria Open Data endpoint is useful beyond vehicle enrichment: it
 also publishes GTFS Realtime trip updates, service alerts and vehicle-position
 feeds for Metro Train, Yarra Trams, Metro & Regional Bus, and V/Line. This CLI
 currently wires in the bus vehicle-position feed first because bus fleet identity

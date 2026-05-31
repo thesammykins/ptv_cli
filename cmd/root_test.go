@@ -104,6 +104,38 @@ func TestGTFSUpdateRejectsUnexpectedArgs(t *testing.T) {
 	}
 }
 
+func TestGTFSRealtimeCatalogJSON(t *testing.T) {
+	t.Setenv("PTV_API_KEY", "test-key")
+	t.Setenv("PTV_API_USERID", "123")
+	t.Setenv("PTV_DATA_DIR", t.TempDir())
+
+	stdout, stderr, err := executeCommand(t, "--json", "gtfs", "realtime")
+	if err != nil {
+		t.Fatalf("gtfs realtime --json: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+
+	var got struct {
+		Feeds []struct {
+			ID   string `json:"id"`
+			Mode string `json:"mode"`
+			Kind string `json:"kind"`
+			URL  string `json:"url"`
+		} `json:"feeds"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if len(got.Feeds) < 9 {
+		t.Fatalf("feeds = %d, want GTFS-R catalog", len(got.Feeds))
+	}
+	if got.Feeds[0].ID == "" || got.Feeds[0].URL == "" {
+		t.Fatalf("first feed missing fields: %+v", got.Feeds[0])
+	}
+}
+
 func TestAuthStatusPropagatesInvalidConfig(t *testing.T) {
 	t.Setenv("PTV_BASE_URL", "http://example.com")
 	stdout, stderr, err := executeCommand(t, "auth", "status")
