@@ -35,6 +35,12 @@ type Config struct {
 	BaseURL string
 	// GTFSURL is the location of the PTV GTFS static feed.
 	GTFSURL string
+	// OpenDataKeyID is the optional Transport Victoria Open Data subscription key used for GTFS Realtime feeds.
+	OpenDataKeyID string
+	// OpenDataAPIID is the optional Transport Victoria Open Data platform API token.
+	OpenDataAPIID string
+	// GTFSRealtimeBusVehiclePositionsURL is the optional GTFS Realtime bus vehicle positions endpoint.
+	GTFSRealtimeBusVehiclePositionsURL string
 	// DataDir is where the local GTFS SQLite database and caches live.
 	DataDir string
 	// CredentialSource records where the credentials were loaded from.
@@ -42,8 +48,9 @@ type Config struct {
 }
 
 const (
-	defaultBaseURL = "https://timetableapi.ptv.vic.gov.au"
-	defaultGTFSURL = "https://data.ptv.vic.gov.au/downloads/gtfs.zip"
+	defaultBaseURL                         = "https://timetableapi.ptv.vic.gov.au"
+	defaultGTFSURL                         = "https://data.ptv.vic.gov.au/downloads/gtfs.zip"
+	defaultGTFSRealtimeBusVehiclePositions = "https://api.opendata.transport.vic.gov.au/opendata/public-transport/gtfs/realtime/v1/bus/vehicle-positions"
 )
 
 // ErrMissingCredentials indicates no credentials were found in any configured
@@ -72,9 +79,12 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 	}
 
 	cfg := &Config{
-		BaseURL: firstNonEmpty(os.Getenv("PTV_BASE_URL"), env["PTV_BASE_URL"], defaultBaseURL),
-		GTFSURL: firstNonEmpty(os.Getenv("PTV_GTFS_URL"), env["PTV_GTFS_URL"], defaultGTFSURL),
-		DataDir: firstNonEmpty(os.Getenv("PTV_DATA_DIR"), env["PTV_DATA_DIR"], defaultDataDir()),
+		BaseURL:                            firstNonEmpty(os.Getenv("PTV_BASE_URL"), env["PTV_BASE_URL"], defaultBaseURL),
+		GTFSURL:                            firstNonEmpty(os.Getenv("PTV_GTFS_URL"), env["PTV_GTFS_URL"], defaultGTFSURL),
+		OpenDataKeyID:                      firstNonEmpty(os.Getenv("PTV_OPENDATA_KEY_ID"), env["PTV_OPENDATA_KEY_ID"], os.Getenv("PTV_OPENDATA_KEYID"), env["PTV_OPENDATA_KEYID"]),
+		OpenDataAPIID:                      firstNonEmpty(os.Getenv("PTV_OPENDATA_API_ID"), env["PTV_OPENDATA_API_ID"]),
+		GTFSRealtimeBusVehiclePositionsURL: firstNonEmpty(os.Getenv("PTV_GTFSR_BUS_VEHICLE_POSITIONS_URL"), env["PTV_GTFSR_BUS_VEHICLE_POSITIONS_URL"], defaultGTFSRealtimeBusVehiclePositions),
+		DataDir:                            firstNonEmpty(os.Getenv("PTV_DATA_DIR"), env["PTV_DATA_DIR"], defaultDataDir()),
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -183,6 +193,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := validateHTTPSURL("PTV_GTFS_URL", c.GTFSURL); err != nil {
+		return err
+	}
+	if err := validateHTTPSURL("PTV_GTFSR_BUS_VEHICLE_POSITIONS_URL", c.GTFSRealtimeBusVehiclePositionsURL); err != nil {
 		return err
 	}
 	dataDir, err := validateDataDir(c.DataDir)

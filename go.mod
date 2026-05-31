@@ -3,9 +3,11 @@ module github.com/thesammykins/ptv_cli
 go 1.25.0
 
 require (
+	github.com/MobilityData/gtfs-realtime-bindings/golang/gtfs v1.0.0
 	github.com/spf13/cobra v1.10.2
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/term v0.43.0
+	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.51.0
 )
 

@@ -10,12 +10,20 @@ import (
 
 // expand option codes used by the departures/pattern endpoints.
 const (
-	ExpandAll        = "0"
-	ExpandStop       = "1"
-	ExpandRoute      = "2"
-	ExpandRun        = "3"
-	ExpandDirection  = "4"
-	ExpandDisruption = "5"
+	ExpandAll                        = "0"
+	ExpandStop                       = "1"
+	ExpandRoute                      = "2"
+	ExpandRun                        = "3"
+	ExpandDirection                  = "4"
+	ExpandDisruption                 = "5"
+	ExpandDepartureVehiclePosition   = "6"
+	ExpandDepartureVehicleDescriptor = "7"
+)
+
+// Vehicle expansion option codes used by the runs endpoint.
+const (
+	ExpandVehiclePosition   = "1"
+	ExpandVehicleDescriptor = "2"
 )
 
 // RouteTypes returns all transport modes and their names.
@@ -133,11 +141,88 @@ func (c *Client) StopDetails(ctx context.Context, stopID, routeType int) (*StopR
 
 // DeparturesOptions controls a departures query.
 type DeparturesOptions struct {
-	RouteID     int // 0 = all routes
-	DirectionID *int
-	MaxResults  int
-	Expand      []string
-	DateUTC     string
+	RouteID       int // 0 = all routes
+	DirectionID   *int
+	MaxResults    int
+	Expand        []string
+	DateUTC       string
+	LookBackwards bool
+}
+
+// RunsOptions controls a runs query.
+type RunsOptions struct {
+	Expand         []string
+	DateUTC        string
+	IncludeGeopath bool
+}
+
+// PatternOptions controls a stopping pattern query.
+type PatternOptions struct {
+	Expand              []string
+	DateUTC             string
+	IncludeSkippedStops bool
+	IncludeGeopath      bool
+}
+
+func runsQuery(opts RunsOptions) url.Values {
+	q := url.Values{}
+	if opts.DateUTC != "" {
+		q.Set("date_utc", opts.DateUTC)
+	}
+	if opts.IncludeGeopath {
+		q.Set("include_geopath", "true")
+	}
+	for _, e := range opts.Expand {
+		q.Add("expand", e)
+	}
+	return q
+}
+
+func patternQuery(opts PatternOptions) url.Values {
+	q := url.Values{}
+	if opts.DateUTC != "" {
+		q.Set("date_utc", opts.DateUTC)
+	}
+	if opts.IncludeSkippedStops {
+		q.Set("include_skipped_stops", "true")
+	}
+	if opts.IncludeGeopath {
+		q.Set("include_geopath", "true")
+	}
+	for _, e := range opts.Expand {
+		q.Add("expand", e)
+	}
+	return q
+}
+
+// Run returns the trip/service run for a run_ref and route_type.
+func (c *Client) Run(ctx context.Context, runRef string, routeType int, opts RunsOptions) (*RunResponse, error) {
+	var out RunResponse
+	path := fmt.Sprintf("/v3/runs/%s/route_type/%d", url.PathEscape(runRef), routeType)
+	if err := c.get(ctx, path, runsQuery(opts), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RunsForRoute returns active runs for a route and route_type.
+func (c *Client) RunsForRoute(ctx context.Context, routeID, routeType int, opts RunsOptions) (*RunsResponse, error) {
+	var out RunsResponse
+	path := fmt.Sprintf("/v3/runs/route/%d/route_type/%d", routeID, routeType)
+	if err := c.get(ctx, path, runsQuery(opts), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Pattern returns the stopping pattern for a run_ref and route_type.
+func (c *Client) Pattern(ctx context.Context, runRef string, routeType int, opts PatternOptions) (*StoppingPatternResponse, error) {
+	var out StoppingPatternResponse
+	path := fmt.Sprintf("/v3/pattern/run/%s/route_type/%d", url.PathEscape(runRef), routeType)
+	if err := c.get(ctx, path, patternQuery(opts), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Departures returns real-time/timetabled departures from a stop.
@@ -151,6 +236,9 @@ func (c *Client) Departures(ctx context.Context, routeType, stopID int, opts Dep
 	}
 	if opts.DateUTC != "" {
 		q.Set("date_utc", opts.DateUTC)
+	}
+	if opts.LookBackwards {
+		q.Set("look_backwards", "true")
 	}
 	for _, e := range opts.Expand {
 		q.Add("expand", e)

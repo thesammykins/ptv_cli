@@ -21,6 +21,9 @@ terminal — exclusively for VIC PTV.
   of `lat,lng`.
 - ⚠️ Real-time **disruption flagging** inside `ptv plan`: any line your journey
   uses is checked for active disruptions and flagged inline.
+- 🚉 Best-effort live vehicle lookup (`ptv vehicle`) from PTV vehicle
+  descriptors/positions where the API exposes them, with optional Transport
+  Victoria GTFS Realtime bus enrichment.
 - 🚋 Mode-scoped commands `ptv tram`, `ptv bus`, `ptv vline` for a full
   per-route view plus `lines` and `next` subcommands.
 - 🔐 Cross-platform secure credential storage in the OS keyring.
@@ -65,6 +68,13 @@ Credentials are resolved in this order:
 
 For local development only, pass `--env-file <path>` to load a dotenv file
 explicitly. The CLI does not auto-read `.env` from the working directory.
+
+Optional Transport Victoria Open Data features use a separate subscription key.
+Set it as `PTV_OPENDATA_KEY_ID` in the environment or in an explicit
+`--env-file`; `PTV_OPENDATA_KEYID` is accepted as an alias. If your portal setup
+also exposes a data platform API token, set `PTV_OPENDATA_API_ID` as well. Without
+the subscription key, the core PTV Timetable API features still work; commands
+that can use GTFS Realtime data will print a warning and skip that enrichment.
 
 Store them securely in the OS keyring:
 
@@ -121,6 +131,7 @@ ptv lines       List transport lines/routes (lines show <route> for detail)
 ptv stops       Find stops near a location (stops near) or on a route (stops on)
 ptv station     Show facilities and platforms for a station/stop
 ptv next        How soon the next services depart a stop (real-time)
+ptv vehicle     Best available live information for a vehicle id or run_ref
 ptv tram        Tram route info, stops, departures and disruptions
 ptv bus         Bus route info, stops, departures and disruptions
 ptv vline       V/Line route info, stops, departures and disruptions
@@ -148,6 +159,70 @@ ptv vline 1745                # Geelong - Melbourne
 ```
 
 Each accepts `--json` for structured output.
+
+### Vehicle lookup
+
+`ptv vehicle` (alias `ptv vehicles`) is a best-effort lookup using the PTV
+Timetable API, with optional Transport Victoria GTFS Realtime bus
+vehicle-position enrichment when `PTV_OPENDATA_KEY_ID` is configured. If your
+Open Data account requires the data platform token, set `PTV_OPENDATA_API_ID` as
+well. The Timetable API does not provide a direct "find vehicle by id" endpoint,
+so the command searches expanded departure/run data where PTV includes
+`vehicle_descriptor` and `vehicle_position` on runs.
+
+```sh
+# Search a Metro train car/consist component seen at a stop/line.
+ptv vehicle 243M --stop Mordialloc --route Frankston
+
+# Search a tram number from a stop context.
+ptv vehicle 6059 --stop "Melbourne Central Station"
+
+# Treat the argument as a PTV run_ref if no physical vehicle id is found.
+ptv vehicle 952377 --json
+
+# Enable optional GTFS Realtime bus enrichment from an explicit env file.
+ptv --env-file .env vehicle '17-903--1-Sun12-903738' --stop 11293
+
+# Search a physical bus id from the GTFS Realtime vehicle-position feed.
+ptv --env-file .env vehicles BS11ZU --stop Chadstone
+
+# Slow fallback: scan a bounded number of active route runs.
+ptv vehicle 243M --scan-routes 20
+```
+
+What PTV currently exposes in live output:
+
+- Metro trains: `vehicle_descriptor.operator` is usually `Metro Trains
+  Melbourne`; `vehicle_descriptor.id` is a consist string such as
+  `113M-114M-1357T-1422T-243M-244M`; `vehicle_descriptor.description` includes
+  values observed in an all-route/all-stop scan: `3 Car Silver Hitachi`, `3 Car
+  Xtrapolis`, `6 Car Comeng`, `6 Car Siemens`, `6 Car Xtrapolis`.
+- Trams: some stop departure contexts expose `vehicle_descriptor.operator` as
+  `Yarra Trams` and a numeric `vehicle_descriptor.id` such as `6059`; the
+  description is often blank and route-filtered scans may not expose it.
+- Buses: sampled runs often expose `vehicle_position` GPS, but identifying
+  `vehicle_descriptor` fields are frequently absent. With `PTV_OPENDATA_KEY_ID`,
+  `ptv vehicle` also checks the official GTFS Realtime Metro & Regional Bus
+  vehicle-position feed for a matching `run_ref`/trip id or bus vehicle id/label,
+  and can return GTFS-R position, occupancy and status directly for bus ids.
+- V/Line: no `vehicle_descriptor` data was observed in broad live sampling.
+
+The Transport Victoria Open Data endpoint is useful beyond bus enrichment: it
+also publishes GTFS Realtime trip updates, service alerts and vehicle-position
+feeds for Metro Train, Yarra Trams, Metro & Regional Bus, and V/Line. This CLI
+currently wires in the bus vehicle-position feed first because bus fleet identity
+is the largest PTV Timetable API gap. Future commands can reuse the same optional
+`PTV_OPENDATA_KEY_ID` configuration for train/tram/VLine GTFS-R positions, trip
+updates, and alerts.
+
+Shortfalls:
+
+- New, testing, commissioning, non-revenue or not-currently-running vehicles may
+  exist in external fleet references but not appear in PTV live data.
+- `last_spotted` means the vehicle appeared in earlier PTV departure data for
+  the hinted stop/route and does not appear in upcoming departures there now.
+- Use external fleet references to confirm that a vehicle exists or belongs to a
+  set/class; use `ptv vehicle` only for what PTV currently exposes live.
 
 ### Examples
 

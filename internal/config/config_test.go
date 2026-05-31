@@ -39,7 +39,7 @@ func TestLoadWithOptionsReadsExplicitEnvFile(t *testing.T) {
 	withoutKeyring(t)
 
 	envFile := filepath.Join(t.TempDir(), "ptv.env")
-	if err := os.WriteFile(envFile, []byte("PTV_API_KEY=from-dotenv\nPTV_API_USERID=123\nPTV_DATA_DIR=cache\n"), 0o600); err != nil {
+	if err := os.WriteFile(envFile, []byte("PTV_API_KEY=from-dotenv\nPTV_API_USERID=123\nPTV_DATA_DIR=cache\nPTV_OPENDATA_KEY_ID=subscription\nPTV_OPENDATA_API_ID=platform-token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -56,11 +56,17 @@ func TestLoadWithOptionsReadsExplicitEnvFile(t *testing.T) {
 	if !filepath.IsAbs(cfg.DataDir) {
 		t.Fatalf("DataDir = %q, want absolute path", cfg.DataDir)
 	}
+	if cfg.OpenDataKeyID != "subscription" {
+		t.Fatalf("OpenDataKeyID = %q, want explicit env file value", cfg.OpenDataKeyID)
+	}
+	if cfg.OpenDataAPIID != "platform-token" {
+		t.Fatalf("OpenDataAPIID = %q, want explicit env file value", cfg.OpenDataAPIID)
+	}
 }
 
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"PTV_API_KEY", "PTV_API_USERID", "PTV_BASE_URL", "PTV_GTFS_URL", "PTV_DATA_DIR"} {
+	for _, key := range []string{"PTV_API_KEY", "PTV_API_USERID", "PTV_BASE_URL", "PTV_GTFS_URL", "PTV_DATA_DIR", "PTV_OPENDATA_KEY_ID", "PTV_OPENDATA_KEYID", "PTV_OPENDATA_API_ID", "PTV_GTFSR_BUS_VEHICLE_POSITIONS_URL"} {
 		t.Setenv(key, "")
 	}
 }

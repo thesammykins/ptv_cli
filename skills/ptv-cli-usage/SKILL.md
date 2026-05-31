@@ -81,6 +81,21 @@ ptv tram next 'Melbourne University' --limit 3
 
 When filtering by `--route` with a `--mode`, public route numbers should work.
 
+### Vehicles
+
+```sh
+ptv vehicle 243M --stop Mordialloc --route Frankston
+ptv vehicle 6059 --stop 'Melbourne Central Station'
+ptv vehicles BS11ZU --stop Chadstone
+ptv vehicle '17-903--1-Sun12-903738' --stop 11293 --json
+```
+
+`vehicle` and `vehicles` are aliases. Train and tram lookups primarily depend on
+PTV Timetable API `vehicle_descriptor` data. Bus physical-id lookup can use the
+Transport Victoria GTFS Realtime bus vehicle-position feed when
+`PTV_OPENDATA_KEY_ID` is configured, with `PTV_OPENDATA_API_ID` if the account
+requires the platform bearer token.
+
 ### Planning
 
 Planning commands should work directly with the user's installed CLI data. Replace placeholders with the user's actual places when known.

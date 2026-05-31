@@ -86,16 +86,44 @@ type Departure struct {
 
 // Run is an individual trip/service of a route.
 type Run struct {
-	RunID            int    `json:"run_id"`
-	RunRef           string `json:"run_ref"`
-	RouteID          int    `json:"route_id"`
-	RouteType        int    `json:"route_type"`
-	FinalStopID      int    `json:"final_stop_id"`
-	DestinationName  string `json:"destination_name"`
-	Status           string `json:"status"`
-	DirectionID      int    `json:"direction_id"`
-	RunSequence      int    `json:"run_sequence"`
-	ExpressStopCount int    `json:"express_stop_count"`
+	RunID             int                `json:"run_id"`
+	RunRef            string             `json:"run_ref"`
+	RouteID           int                `json:"route_id"`
+	RouteType         int                `json:"route_type"`
+	FinalStopID       int                `json:"final_stop_id"`
+	DestinationName   string             `json:"destination_name"`
+	Status            string             `json:"status"`
+	DirectionID       int                `json:"direction_id"`
+	RunSequence       int                `json:"run_sequence"`
+	ExpressStopCount  int                `json:"express_stop_count"`
+	VehiclePosition   *VehiclePosition   `json:"vehicle_position"`
+	VehicleDescriptor *VehicleDescriptor `json:"vehicle_descriptor"`
+	Geopath           []any              `json:"geopath"`
+	RunNote           string             `json:"run_note"`
+}
+
+// VehiclePosition is the best live position PTV exposes for a run.
+type VehiclePosition struct {
+	Latitude    *float64 `json:"latitude"`
+	Longitude   *float64 `json:"longitude"`
+	Easting     *float64 `json:"easting"`
+	Northing    *float64 `json:"northing"`
+	Direction   string   `json:"direction"`
+	Bearing     *float64 `json:"bearing"`
+	Supplier    string   `json:"supplier"`
+	DatetimeUTC string   `json:"datetime_utc"`
+	ExpiryTime  string   `json:"expiry_time"`
+}
+
+// VehicleDescriptor identifies characteristics of the vehicle serving a run.
+type VehicleDescriptor struct {
+	Operator       string `json:"operator"`
+	ID             string `json:"id"`
+	LowFloor       *bool  `json:"low_floor"`
+	AirConditioned *bool  `json:"air_conditioned"`
+	Description    string `json:"description"`
+	Supplier       string `json:"supplier"`
+	Length         string `json:"length"`
 }
 
 // DisruptionRoute is a route referenced by a disruption.
@@ -145,6 +173,35 @@ type DeparturesResponse struct {
 	Directions  map[string]Direction  `json:"directions"`
 	Disruptions map[string]Disruption `json:"disruptions"`
 	Status      Status                `json:"status"`
+}
+
+// RunResponse wraps a single run endpoint.
+type RunResponse struct {
+	Run    Run    `json:"run"`
+	Status Status `json:"status"`
+}
+
+// RunsResponse wraps route runs endpoints.
+type RunsResponse struct {
+	Runs   []Run  `json:"runs"`
+	Status Status `json:"status"`
+}
+
+// PatternDeparture is a departure within a stopping pattern.
+type PatternDeparture struct {
+	Departure
+	SkippedStops []StopModel `json:"skipped_stops"`
+}
+
+// StoppingPatternResponse wraps a run's stopping pattern.
+type StoppingPatternResponse struct {
+	Departures  []PatternDeparture   `json:"departures"`
+	Stops       map[string]StopModel `json:"stops"`
+	Routes      map[string]Route     `json:"routes"`
+	Runs        map[string]Run       `json:"runs"`
+	Directions  map[string]Direction `json:"directions"`
+	Disruptions []Disruption         `json:"disruptions"`
+	Status      Status               `json:"status"`
 }
 
 // StopsOnRouteResponse wraps stops/route/{route}/route_type/{rt}.

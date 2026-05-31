@@ -58,6 +58,8 @@ Run a mix of human and JSON workflows:
 <ptv> station 1071
 <ptv> next 'Flinders Street' --mode train --limit 5
 <ptv> next 'Melbourne University' --mode tram --route 109 --limit 3
+<ptv> vehicle 243M --stop Mordialloc --route Frankston
+<ptv> vehicle '17-903--1-Sun12-903738' --stop 11293 --json
 <ptv> lines --mode train --limit 5
 <ptv> lines 'Mernda'
 <ptv> tram 109

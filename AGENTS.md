@@ -45,6 +45,7 @@ internal/
   credstore/         cross-platform OS keyring wrapper (go-keyring)
   geocode/           OpenStreetMap Nominatim client (VIC-biased, cached)
   ptvapi/            HMAC-SHA1 signer, HTTP client, typed v3 models, endpoints
+  gtfsrt/            Transport Victoria Open Data GTFS Realtime protobuf client
   gtfs/              downloader, zip-of-zips ingest, schema/queries, freshness
   router/            Connection Scan Algorithm (earliest-arrival + arrive-by)
   model/             shared domain types (Stop, Connection, Journey, Leg, ...)
@@ -60,10 +61,14 @@ internal/
   send human warnings/notes to **stderr** so JSON stays parseable.
 - **Time zone is `Australia/Melbourne`** for all user-facing times; the
   Timetable API speaks UTC and is converted for display.
-- **Credentials**: resolved env → OS keyring → `.env`. Never commit `.env` or
-  secrets. Prefer `ptv auth login` (keyring). The API signature is
+- **Credentials**: PTV Timetable API credentials are resolved env → OS keyring →
+  explicit `--env-file`; the CLI does not auto-read `.env`. Never commit `.env`
+  or secrets. Prefer `ptv auth login` (keyring). The API signature is
   `HMAC-SHA1("{path}?{query-incl-devid}")`, uppercase hex, appended as
-  `&signature=`.
+  `&signature=`. Optional Transport Victoria Open Data GTFS-R uses
+  `PTV_OPENDATA_KEY_ID` (`PTV_OPENDATA_KEYID` alias accepted) for the
+  subscription key, optionally `PTV_OPENDATA_API_ID` for the data platform token,
+  and is not stored by `ptv auth`.
 
 ## Gotchas (read before editing)
 
@@ -85,6 +90,25 @@ internal/
 - **GTFS data is a rolling ~30-day window**, published ~weekly. Past the window
   the planner silently finds no services. Freshness checks (below) warn but do
   **not** block.
+- **Vehicle lookup is descriptor-driven, not a direct fleet API.** PTV exposes
+  `vehicle_descriptor` and `vehicle_position` only when expanded on some
+  departures/runs. There is no public direct "find vehicle by id" endpoint.
+  Metro train descriptors appear as consist strings (e.g.
+  `113M-114M-1357T-1422T-243M-244M`) and can be matched by any component; observed
+  descriptions from an exhaustive train stop scan are `3 Car Silver Hitachi`,
+  `3 Car Xtrapolis`, `6 Car Comeng`, `6 Car Siemens`, `6 Car Xtrapolis`.
+  Tram descriptors can appear from some stop departure contexts (`Yarra Trams`,
+  numeric ids) but route-filtered scans may not expose them. Bus often exposes
+  position without an identifying descriptor; V/Line descriptors were not
+  observed in broad sampling. Keep user messages explicit about `last_spotted`
+  vs current service and about external fleet sources being existence/class
+  references, not proof of live PTV visibility.
+- **Transport Victoria GTFS Realtime is separate from the Timetable API.** It is
+  protobuf, uses the Open Data subscription key as a `KeyId`/`KeyID` header plus
+  optional `PTV_OPENDATA_API_ID` bearer token, and has feeds for trip updates,
+  service alerts and vehicle positions across train/tram/bus/VLine. `ptv vehicle`
+  first uses the bus vehicle-position feed for optional bus enrichment and direct
+  bus-id lookup because PTV Timetable API bus descriptors are frequently absent.
 
 ## GTFS freshness
 

@@ -9,6 +9,7 @@
 # Local data / databases
 *.sqlite
 *.sqlite-*
+/local-artifacts/
 
 # GoReleaser output
 /dist/
