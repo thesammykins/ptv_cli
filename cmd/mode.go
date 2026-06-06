@@ -360,6 +360,7 @@ func flattenDisruptions(resp *ptvapi.DisruptionsResponse) []ptvapi.Disruption {
 }
 
 func init() {
+	rootCmd.AddCommand(newModeCommand("train", "Train route info, stops, departures and disruptions", 0))
 	rootCmd.AddCommand(newModeCommand("tram", "Tram route info, stops, departures and disruptions", 1))
 	rootCmd.AddCommand(newModeCommand("bus", "Bus route info, stops, departures and disruptions", 2))
 	rootCmd.AddCommand(newModeCommand("vline", "V/Line route info, stops, departures and disruptions", 3))

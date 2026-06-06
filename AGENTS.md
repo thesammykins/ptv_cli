@@ -79,6 +79,13 @@ internal/
   1=V/Line Train, 2=Metro Train, 3=Tram, 4=Bus, 5=V/Line Coach, 6=Regional Bus
   (others=bus). `Leg.RouteType` carries this feed_mode; map to API route_type
   via `feedToAPIType` and to a label via `gtfsModeName`.
+- **`block_id` is now ingested** from the GTFS trips table (was previously absent).
+  A `block_id` groups consecutive trips of the same physical vehicle. The planner
+  carries block_id through to `model.Connection` and `model.Leg`, enabling run
+  continuation detection (e.g. "same train continues from X → Y").
+- **`ptv train` mode command** exists (`route_type 0`), matching the pattern of
+  `ptv tram`/`bus`/`vline`. It was previously missing from `$GOPATH/bin/ptv`
+  builds due to a stale binary.
 - **Search terms can't contain `/`.** PTV signs the URL path, and a `/` breaks
   the signature (403). `ptvapi.Search` collapses `/` to spaces — many stop
   names use it (e.g. "Bourke St/Spencer St").

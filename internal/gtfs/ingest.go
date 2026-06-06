@@ -302,7 +302,7 @@ func ingestTrips(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) e
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO trips(trip_id,route_id,service_id,trip_headsign,direction_id) VALUES(?,?,?,?,?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO trips(trip_id,route_id,service_id,trip_headsign,direction_id,block_id) VALUES(?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -328,7 +328,7 @@ func ingestTrips(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) e
 		if err != nil {
 			return fmt.Errorf("trip %s: %w", tripID, err)
 		}
-		if _, err := stmt.Exec(prefix(feedMode, tripID), prefix(feedMode, routeID), prefix(feedMode, serviceID), get(row, idx, "trip_headsign"), dir); err != nil {
+		if _, err := stmt.Exec(prefix(feedMode, tripID), prefix(feedMode, routeID), prefix(feedMode, serviceID), get(row, idx, "trip_headsign"), dir, get(row, idx, "block_id")); err != nil {
 			return err
 		}
 	}

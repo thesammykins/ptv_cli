@@ -23,6 +23,7 @@ type Connection struct {
 	ArrTime  int64
 	TripID   string
 	RouteIdx int
+	BlockID  string
 }
 
 // Footpath is a walking transfer between two stops.
@@ -52,6 +53,9 @@ type Timetable struct {
 	TripRoute map[string]int
 	// TripHeadsign maps a trip id to its headsign.
 	TripHeadsign map[string]string
+	// TripBlock maps a trip id to its block id (shared by consecutive
+	// journeys of the same physical vehicle), empty if unavailable.
+	TripBlock map[string]string
 	// ByName maps lower-cased stop name to stop indexes (for resolution).
 	NameIndex map[string][]int
 	// Day is midnight (local) of the query day.
@@ -72,6 +76,7 @@ type Leg struct {
 	RouteType      int    `json:"mode,omitempty"`
 	Headsign       string `json:"headsign,omitempty"`
 	TripID         string `json:"trip_id,omitempty"`
+	BlockID        string `json:"block_id,omitempty"`
 	// Disruption annotations (populated when real-time disruptions are
 	// overlaid onto the journey).
 	Disrupted     bool    `json:"disrupted,omitempty"`

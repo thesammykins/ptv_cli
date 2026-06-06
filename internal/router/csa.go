@@ -217,6 +217,7 @@ func reconstruct(tt *model.Timetable, conns []model.Connection, r scanResult, so
 			DepTime:  unix(bc.DepTime),
 			ArrTime:  unix(ec.ArrTime),
 			TripID:   ec.TripID,
+			BlockID:  ec.BlockID,
 		}
 		if ec.RouteIdx >= 0 && ec.RouteIdx < len(tt.Routes) {
 			ri := tt.Routes[ec.RouteIdx]
@@ -246,6 +247,7 @@ func reverseConnections(conns []model.Connection) []model.Connection {
 			ArrTime:  -c.DepTime,
 			TripID:   c.TripID,
 			RouteIdx: c.RouteIdx,
+			BlockID:  c.BlockID,
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].DepTime < out[j].DepTime })

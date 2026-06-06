@@ -349,6 +349,15 @@ func renderJourney(j *model.Journey, from, to string, arriveBy bool, queryTime t
 		return err
 	}
 
+	// Show run continuation (same physical train forming multiple legs).
+	for i := 1; i < len(j.Legs); i++ {
+		if j.Legs[i-1].BlockID != "" && j.Legs[i-1].BlockID == j.Legs[i].BlockID {
+			fmt.Printf("\n  Same train continues from %s → %s\n",
+				render.CleanText(j.Legs[i-1].ToStop.Name),
+				render.CleanText(j.Legs[i].FromStop.Name))
+		}
+	}
+
 	if len(j.Disruptions) > 0 {
 		fmt.Println("\n⚠ Disruptions affecting this journey")
 		for _, d := range j.Disruptions {

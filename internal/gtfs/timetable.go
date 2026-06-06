@@ -1,6 +1,7 @@
 package gtfs
 
 import (
+	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
@@ -23,6 +24,7 @@ func (s *Store) LoadTimetable(day time.Time) (*model.Timetable, error) {
 		Day:          day,
 		TripRoute:    map[string]int{},
 		TripHeadsign: map[string]string{},
+		TripBlock:    map[string]string{},
 		NameIndex:    map[string][]int{},
 	}
 
@@ -149,14 +151,15 @@ func feedModeFromID(id string) int {
 }
 
 func (s *Store) loadTrips(tt *model.Timetable, routeIdx map[string]int) error {
-	rows, err := s.db.Query(`SELECT trip_id, route_id, trip_headsign FROM trips`)
+	rows, err := s.db.Query(`SELECT trip_id, route_id, trip_headsign, block_id FROM trips`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var tripID, routeID, headsign string
-		if err := rows.Scan(&tripID, &routeID, &headsign); err != nil {
+		var blockID sql.NullString
+		if err := rows.Scan(&tripID, &routeID, &headsign, &blockID); err != nil {
 			return err
 		}
 		if ri, ok := routeIdx[routeID]; ok {
@@ -165,6 +168,9 @@ func (s *Store) loadTrips(tt *model.Timetable, routeIdx map[string]int) error {
 			tt.TripRoute[tripID] = -1
 		}
 		tt.TripHeadsign[tripID] = headsign
+		if blockID.Valid {
+			tt.TripBlock[tripID] = blockID.String
+		}
 	}
 	return rows.Err()
 }
@@ -296,6 +302,7 @@ func (s *Store) appendConnections(tt *model.Timetable, stopIdx map[string]int, a
 					ArrTime:  baseUnix + int64(arrSec),
 					TripID:   tripID,
 					RouteIdx: tt.TripRoute[tripID],
+					BlockID:  tt.TripBlock[tripID],
 				})
 			}
 		}

@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS trips (
 	route_id    TEXT,
 	service_id  TEXT,
 	trip_headsign TEXT,
-	direction_id INTEGER
+	direction_id INTEGER,
+	block_id    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS stop_times (
@@ -63,6 +64,11 @@ CREATE TABLE IF NOT EXISTS transfers (
 	transfer_type INTEGER,
 	min_transfer_time INTEGER
 );
+`
+
+// migrations run after the main schema to upgrade existing databases.
+const migrations = `
+ALTER TABLE trips ADD COLUMN block_id TEXT;
 `
 
 // indexes are created after bulk ingest for speed.

@@ -37,6 +37,8 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("creating schema: %w", err)
 	}
+	// Run migrations; ignore "duplicate column" errors on re-run.
+	db.Exec(migrations)
 	if err := os.Chmod(path, 0o600); err != nil {
 		db.Close()
 		return nil, err
