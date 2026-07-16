@@ -31,7 +31,20 @@ but do not include credential values or raw signed URLs.
 
 ## Local Checks
 
-Run these before opening or updating a PR:
+The repository pins its supported Go patch release and common checks with
+[`mise`](https://mise.jdx.dev/). After reviewing `mise.toml`, trust it once per
+checkout and run these before opening or updating a PR:
+
+```sh
+mise trust
+mise install
+mise run check
+# Before an audit/release sign-off:
+mise run audit-check
+```
+
+`mise` does not load `.env`. Use the CLI's explicit `--env-file` flag only for
+an authorized live check. Without `mise`, run the equivalent commands directly:
 
 ```sh
 gofmt -w <files-you-touched>
@@ -92,7 +105,9 @@ ptv plan --arrive-by 09:00 -- "-37.8183,144.9671" "Camberwell"
 ## Release Notes
 
 Tags `vX.Y.Z` trigger the release workflow. For release PRs or release-triggering
-changes, call out:
+changes, update the root `VERSION` file to the intended stable version and add
+the matching release note under `docs/releases/`. The release workflow rejects
+a tag that does not exactly match `VERSION`. Also call out:
 
 - New commands or flags.
 - Changed JSON fields or output shapes.

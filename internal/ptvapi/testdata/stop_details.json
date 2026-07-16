@@ -1,0 +1,75 @@
+{
+  "stop": {
+    "disruption_ids": [101],
+    "station_type": "Premium",
+    "station_description": "Staffed from first to last train",
+    "route_type": 0,
+    "stop_location": {
+      "gps": {
+        "latitude": -37.818175,
+        "longitude": 144.966776
+      }
+    },
+    "stop_amenities": {
+      "toilet": true,
+      "taxi_rank": false,
+      "car_parking": "12",
+      "cctv": true
+    },
+    "stop_accessibility": {
+      "lighting": true,
+      "platform_number": 1,
+      "audio_customer_information": true,
+      "escalator": false,
+      "hearing_loop": true,
+      "lift": true,
+      "stairs": true,
+      "stop_accessible": true,
+      "tactile_ground_surface_indicator": true,
+      "waiting_room": true,
+      "wheelchair": {
+        "accessible_ramp": true,
+        "parking": true,
+        "telephone": false,
+        "toilet": true,
+        "low_ticket_counter": true,
+        "manouvering": true,
+        "raised_platform": true,
+        "ramp": true,
+        "secondary_path": true,
+        "raised_platform_shelther": true,
+        "steep_ramp": false
+      }
+    },
+    "stop_staffing": {
+      "mon_am_from": "05:00",
+      "mon_am_to": "12:00",
+      "wed_pm_from": "12:00",
+      "wed_pm_To": "23:59",
+      "ph_additional_text": "Check public holiday timetable"
+    },
+    "routes": [
+      {
+        "route_type": 0,
+        "route_id": 1,
+        "route_name": "Alamein",
+        "route_number": "",
+        "route_gtfs_id": "1-ALM"
+      }
+    ],
+    "stop_id": 1071,
+    "stop_name": "Flinders Street Railway Station",
+    "stop_landmark": "Flinders Street"
+  },
+  "disruptions": {
+    "101": {
+      "disruption_id": 101,
+      "title": "Platform change",
+      "disruption_status": "Current"
+    }
+  },
+  "status": {
+    "version": "3.0",
+    "health": 1
+  }
+}

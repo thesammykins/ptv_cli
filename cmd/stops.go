@@ -2,12 +2,15 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/thesammykins/ptv_cli/internal/geocode"
+	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 	"github.com/thesammykins/ptv_cli/internal/render"
 )
 
@@ -35,34 +38,55 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 			return err
 		}
 		lat, lng, err := parseLatLng(args[0])
+		attribution := ""
 		if err != nil {
-			place, gerr := geocode.New(cfg.DataDir).Lookup(ctx(), args[0])
+			geocoder, gerr := geocode.NewWithOptions(geocode.Options{
+				Endpoint:    cfg.GeocoderURL,
+				Provider:    cfg.GeocoderProvider,
+				Attribution: cfg.GeocoderAttribution,
+				CacheDir:    filepath.Join(cfg.DataDir, "geocode"),
+				BeforeRequest: func(_ string) {
+					fmt.Fprintf(os.Stderr, "No coordinates supplied; sending the place query to %s.\n", render.CleanText(cfg.GeocoderProvider))
+				},
+			})
+			if gerr != nil {
+				return gerr
+			}
+			place, gerr := geocoder.Lookup(cmd.Context(), args[0])
 			if gerr != nil {
 				return fmt.Errorf("expected lat,lng or geocodable place: %w", gerr)
 			}
 			lat, lng = place.Lat, place.Lon
+			attribution = place.Attribution
 		}
 		routeTypes, err := modesToTypes(stopsModes)
 		if err != nil {
 			return err
 		}
-		resp, err := client.StopsNearLocation(ctx(), lat, lng, routeTypes, flagLimit, stopsNearDistance())
+		resp, err := client.StopsNearLocation(cmd.Context(), lat, lng, routeTypes, flagLimit, stopsNearDistance())
 		if err != nil {
 			return err
 		}
-		resp.Stops = limitStops(resp.Stops)
-		if flagJSON {
-			return printJSON(resp)
-		}
-		sort.Slice(resp.Stops, func(i, j int) bool {
-			return resp.Stops[i].StopDistance < resp.Stops[j].StopDistance
+		sort.SliceStable(resp.Stops, func(i, j int) bool {
+			if resp.Stops[i].StopDistance != resp.Stops[j].StopDistance {
+				return resp.Stops[i].StopDistance < resp.Stops[j].StopDistance
+			}
+			return resp.Stops[i].StopID < resp.Stops[j].StopID
 		})
+		resp.Stops = limitStops(resp.Stops)
+		output := newStopsOutput(resp.Stops, resp.Status, attribution)
+		if flagJSON {
+			return printJSON(output)
+		}
 		t := render.NewTable("ID", "STOP", "SUBURB", "MODE", "DIST(m)")
-		for _, s := range resp.Stops {
+		for _, s := range output.Stops {
 			t.Row(s.StopID, s.StopName, s.StopSuburb, routeTypeName(s.RouteType), fmt.Sprintf("%.0f", s.StopDistance))
 		}
 		if err := t.Flush(); err != nil {
 			return err
+		}
+		if attribution != "" {
+			fmt.Printf("\nData attribution: %s\n", render.CleanText(attribution))
 		}
 		return nil
 	},
@@ -83,22 +107,23 @@ var stopsOnCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		route, err := resolveRouteWithTypes(client, joinArgs(args), routeTypes)
+		route, err := resolveRouteWithTypesContext(cmd.Context(), client, joinArgs(args), routeTypes)
 		if err != nil {
 			return err
 		}
-		resp, err := client.StopsForRoute(ctx(), route.RouteID, route.RouteType, nil)
+		resp, err := client.StopsForRoute(cmd.Context(), route.RouteID, route.RouteType, nil)
 		if err != nil {
 			return err
-		}
-		resp.Stops = limitStops(resp.Stops)
-		if flagJSON {
-			return printJSON(resp)
 		}
 		sortStopsBySequence(resp.Stops)
+		resp.Stops = limitStops(resp.Stops)
+		output := newStopsOutput(resp.Stops, resp.Status, "")
+		if flagJSON {
+			return printJSON(output)
+		}
 		fmt.Printf("Stops on %s (%s)\n", render.CleanText(route.RouteName), routeTypeName(route.RouteType))
 		t := render.NewTable("ID", "STOP", "SUBURB")
-		for _, s := range resp.Stops {
+		for _, s := range output.Stops {
 			t.Row(s.StopID, s.StopName, s.StopSuburb)
 		}
 		if err := t.Flush(); err != nil {
@@ -106,6 +131,48 @@ var stopsOnCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+type stopsOutput struct {
+	Stops       []stopsStopOutput `json:"stops"`
+	Status      stopsStatusOutput `json:"status"`
+	Attribution string            `json:"attribution,omitempty"`
+}
+
+type stopsStopOutput struct {
+	StopID        int     `json:"stop_id"`
+	PTVStopID     int     `json:"ptv_stop_id"`
+	StopName      string  `json:"stop_name"`
+	StopSuburb    string  `json:"stop_suburb"`
+	RouteType     int     `json:"route_type"`
+	StopLatitude  float64 `json:"stop_latitude"`
+	StopLongitude float64 `json:"stop_longitude"`
+	StopLandmark  string  `json:"stop_landmark,omitempty"`
+	StopDistance  float64 `json:"stop_distance,omitempty"`
+	StopSequence  int     `json:"stop_sequence,omitempty"`
+}
+
+type stopsStatusOutput struct {
+	Version string `json:"version"`
+	Health  int    `json:"health"`
+}
+
+func newStopsOutput(stops []ptvapi.StopModel, status ptvapi.Status, attribution string) stopsOutput {
+	output := stopsOutput{
+		Stops:       make([]stopsStopOutput, 0, len(stops)),
+		Status:      stopsStatusOutput{Version: normalizedText(status.Version), Health: status.Health},
+		Attribution: normalizedText(attribution),
+	}
+	for _, stop := range stops {
+		output.Stops = append(output.Stops, stopsStopOutput{
+			StopID: stop.StopID, PTVStopID: stop.StopID,
+			StopName: normalizedText(stop.StopName), StopSuburb: normalizedText(stop.StopSuburb),
+			RouteType: stop.RouteType, StopLatitude: stop.StopLatitude, StopLongitude: stop.StopLongitude,
+			StopLandmark: normalizedText(stop.StopLandmark), StopDistance: stop.StopDistance,
+			StopSequence: stop.StopSequence,
+		})
+	}
+	return output
 }
 
 // parseLatLng parses a "lat,lng" string.

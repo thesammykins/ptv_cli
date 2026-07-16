@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
@@ -13,48 +13,9 @@ import (
 
 // printJSON writes v as indented JSON to stdout.
 func printJSON(v any) error {
-	cleanJSONStrings(reflect.ValueOf(v))
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
-}
-
-func cleanJSONStrings(v reflect.Value) {
-	if !v.IsValid() {
-		return
-	}
-	if v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
-		if v.IsNil() {
-			return
-		}
-		cleanJSONStrings(v.Elem())
-		return
-	}
-	switch v.Kind() {
-	case reflect.Struct:
-		for i := 0; i < v.NumField(); i++ {
-			cleanJSONStrings(v.Field(i))
-		}
-	case reflect.Slice, reflect.Array:
-		for i := 0; i < v.Len(); i++ {
-			cleanJSONStrings(v.Index(i))
-		}
-	case reflect.Map:
-		for _, key := range v.MapKeys() {
-			item := v.MapIndex(key)
-			if !item.IsValid() {
-				continue
-			}
-			copy := reflect.New(item.Type()).Elem()
-			copy.Set(item)
-			cleanJSONStrings(copy)
-			v.SetMapIndex(key, copy)
-		}
-	case reflect.String:
-		if v.CanSet() {
-			v.SetString(strings.TrimSpace(v.String()))
-		}
-	}
 }
 
 // routeTypeName maps a PTV route_type code to a human label.
@@ -134,6 +95,13 @@ func sortStopsBySequence(stops []ptvapi.StopModel) {
 		}
 		return stops[i].StopName < stops[j].StopName
 	})
+}
+
+func stopSequenceLabel(sequence int) string {
+	if sequence <= 0 {
+		return "-"
+	}
+	return strconv.Itoa(sequence)
 }
 
 func limitDepartures(deps []ptvapi.Departure) []ptvapi.Departure {

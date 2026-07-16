@@ -1,0 +1,105 @@
+{
+  "departures": [
+    {
+      "stop_id": 101,
+      "ptv_stop_id": 101,
+      "route_id": 7,
+      "ptv_route_id": 7,
+      "run_id": 22,
+      "run_ref": "run-A",
+      "ptv_run_ref": "run-A",
+      "direction_id": 3,
+      "ptv_direction_id": 3,
+      "disruption_ids": [
+        55
+      ],
+      "ptv_disruption_ids": [
+        55
+      ],
+      "scheduled_departure_utc": "2026-07-16T00:00:00Z",
+      "estimated_departure_utc": "2026-07-16T00:02:00Z",
+      "scheduled_departure": "2026-07-16T10:00:00+10:00",
+      "estimated_departure": "2026-07-16T10:02:00+10:00",
+      "at_platform": true,
+      "platform_number": "1",
+      "flags": "RR",
+      "departure_sequence": 10,
+      "departure_note": "Board here",
+      "route_label": "1",
+      "towards": "Flinders Street",
+      "service_status": "+2 min late"
+    }
+  ],
+  "stops": {
+    "101": {
+      "stop_id": 101,
+      "ptv_stop_id": 101,
+      "stop_name": "Central Station",
+      "stop_suburb": "Melbourne",
+      "route_type": 0,
+      "stop_latitude": -37.81,
+      "stop_longitude": 144.96,
+      "stop_sequence": 0
+    }
+  },
+  "routes": {
+    "7": {
+      "route_type": 0,
+      "route_id": 7,
+      "ptv_route_id": 7,
+      "route_name": "City Loop",
+      "route_number": "1",
+      "route_gtfs_id": "metro:1"
+    }
+  },
+  "runs": {
+    "run-A": {
+      "run_id": 22,
+      "run_ref": "run-A",
+      "ptv_run_ref": "run-A",
+      "route_id": 7,
+      "ptv_route_id": 7,
+      "route_type": 0,
+      "final_stop_id": 999,
+      "ptv_final_stop_id": 999,
+      "destination_name": "Flinders Street",
+      "status": "Active",
+      "direction_id": 3,
+      "ptv_direction_id": 3,
+      "run_sequence": 0,
+      "express_stop_count": 0
+    }
+  },
+  "directions": {
+    "3": {
+      "direction_id": 3,
+      "ptv_direction_id": 3,
+      "direction_name": "City",
+      "route_direction_description": "via Loop",
+      "route_id": 7,
+      "ptv_route_id": 7,
+      "route_type": 0
+    }
+  },
+  "disruptions": {
+    "55": {
+      "disruption_id": 55,
+      "ptv_disruption_id": 55,
+      "title": "Works",
+      "description": "Replacement buses",
+      "disruption_status": "Current",
+      "disruption_type": "Planned",
+      "published_on": "2026-07-16T09:00:00+10:00",
+      "last_updated": "2026-07-16T09:30:00+10:00",
+      "from_date": "2026-07-16T10:00:00+10:00",
+      "to_date": "2026-07-16T14:00:00+10:00",
+      "routes": [],
+      "stops": []
+    }
+  },
+  "status": {
+    "version": "3.0",
+    "health": 1
+  },
+  "time_zone": "Australia/Melbourne"
+}

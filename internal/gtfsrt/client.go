@@ -2,10 +2,13 @@ package gtfsrt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,220 +16,253 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Vehicle is a normalized GTFS Realtime vehicle-position entity.
-type Vehicle struct {
-	EntityID        string
-	TripID          string
-	RouteID         string
-	StartDate       string
-	StartTime       string
-	VehicleID       string
-	Label           string
-	LicensePlate    string
-	StopID          string
-	CurrentStatus   string
-	OccupancyStatus string
-	TimestampUTC    string
-	Latitude        *float64
-	Longitude       *float64
-	Bearing         *float64
-	Speed           *float64
+const (
+	defaultRequestTimeout    = 30 * time.Second
+	defaultMaxProtobufBytes  = int64(32 << 20)
+	defaultMaxErrorBodyBytes = int64(64 << 10)
+	maximumRetryAfter        = 5 * time.Minute
+)
+
+// ClientOptions controls transport, time, and response limits.
+type ClientOptions struct {
+	HTTPClient       *http.Client
+	RequestTimeout   time.Duration
+	MaxProtobufBytes int64
+	MaxErrorBytes    int64
+	Now              func() time.Time
 }
 
-// Client fetches Transport Victoria GTFS Realtime protobuf feeds.
+// Client fetches Transport Victoria GTFS Realtime feeds using their catalog
+// authentication metadata.
 type Client struct {
-	keyID string
-	apiID string
-	http  *http.Client
+	keyID            string
+	http             *http.Client
+	requestTimeout   time.Duration
+	maxProtobufBytes int64
+	maxErrorBytes    int64
+	now              func() time.Time
 }
 
-// New constructs a GTFS Realtime client using Transport Victoria Open Data credentials.
-func New(keyID, apiID string) *Client {
-	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		ForceAttemptHTTP2:     false,
-		MaxIdleConns:          10,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-	return &Client{
-		keyID: keyID,
-		apiID: apiID,
-		http:  &http.Client{Timeout: 30 * time.Second, Transport: transport},
-	}
+// New constructs a GTFS Realtime client using the catalog's documented KeyID
+// subscription credential.
+func New(keyID string) *Client {
+	return NewWithOptions(keyID, ClientOptions{})
 }
 
-// Fetch fetches and decodes a GTFS Realtime protobuf feed.
-func (c *Client) Fetch(ctx context.Context, feedURL string) (*gtfs.FeedMessage, error) {
-	if c.keyID == "" {
-		return c.fetch(ctx, feedURL, "")
+// NewWithOptions constructs an injectable, resource-bounded client.
+func NewWithOptions(keyID string, opts ClientOptions) *Client {
+	requestTimeout := opts.RequestTimeout
+	if requestTimeout == 0 {
+		requestTimeout = defaultRequestTimeout
 	}
-	errs := make([]string, 0, 3)
-	for _, headerName := range []string{"Ocp-Apim-Subscription-Key", "KeyID", "KeyId"} {
-		feed, err := c.fetch(ctx, feedURL, headerName)
-		if err == nil {
-			return feed, nil
+	maxProtobufBytes := opts.MaxProtobufBytes
+	if maxProtobufBytes <= 0 {
+		maxProtobufBytes = defaultMaxProtobufBytes
+	}
+	maxErrorBytes := opts.MaxErrorBytes
+	if maxErrorBytes <= 0 {
+		maxErrorBytes = defaultMaxErrorBodyBytes
+	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+
+	httpClient := opts.HTTPClient
+	if httpClient == nil {
+		transport := &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			ForceAttemptHTTP2:     false,
+			MaxIdleConns:          10,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
 		}
-		errs = append(errs, err.Error())
+		httpClient = &http.Client{Transport: transport}
 	}
-	return nil, fmt.Errorf("%s", strings.Join(errs, "; "))
+
+	return &Client{
+		keyID:            strings.TrimSpace(keyID),
+		http:             httpClient,
+		requestTimeout:   requestTimeout,
+		maxProtobufBytes: maxProtobufBytes,
+		maxErrorBytes:    maxErrorBytes,
+		now:              now,
+	}
 }
 
-// FetchVehiclePositions fetches and decodes a GTFS Realtime vehicle positions feed.
-func (c *Client) FetchVehiclePositions(ctx context.Context, feedURL string) (*gtfs.FeedMessage, error) {
-	return c.Fetch(ctx, feedURL)
-}
+// FetchSnapshot fetches and normalizes one catalog feed. It performs at most
+// one HTTP request and never changes authentication headers as a retry.
+func (c *Client) FetchSnapshot(ctx context.Context, feed Feed) (snapshot *Snapshot, err error) {
+	defer func() {
+		err = sanitizeCredentialError(err, c.keyID)
+	}()
 
-func (c *Client) fetch(ctx context.Context, feedURL, headerName string) (*gtfs.FeedMessage, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
-	if err != nil {
+	if err := validateFeed(feed); err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/x-protobuf")
-	if headerName != "" {
-		req.Header[headerName] = []string{c.keyID}
+	if feed.Authentication.Required && c.keyID == "" {
+		return nil, &Error{Kind: ErrorAuthentication, FeedID: feed.ID, Message: "missing Open Data KeyID credential"}
 	}
-	if c.apiID != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiID)
+
+	requestCtx := ctx
+	cancel := func() {}
+	if c.requestTimeout > 0 {
+		requestCtx, cancel = context.WithTimeout(ctx, c.requestTimeout)
+	}
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, feed.URL, nil)
+	if err != nil {
+		return nil, &Error{Kind: ErrorInvalidRequest, FeedID: feed.ID, Message: "constructing GTFS Realtime request", Err: safeTransportError(err)}
+	}
+	req.Header.Set("Accept", "application/x-protobuf")
+	if c.keyID != "" {
+		// Assign directly so the documented KeyID spelling is retained on the
+		// wire instead of MIME-canonicalizing it to Keyid.
+		req.Header[KeyIDHeader] = []string{c.keyID}
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, classifyTransportError(requestCtx, feed.ID, err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	limit := c.maxProtobufBytes
+	if resp.StatusCode != http.StatusOK && c.maxErrorBytes < limit {
+		limit = c.maxErrorBytes
+	}
+	body, err := readBounded(resp.Body, limit)
 	if err != nil {
-		return nil, fmt.Errorf("reading response: %w", err)
+		var netErr net.Error
+		if requestCtx.Err() != nil || errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+			return nil, classifyTransportError(requestCtx, feed.ID, err)
+		}
+		message := "reading GTFS Realtime response"
+		var limitErr *responseLimitError
+		if errors.As(err, &limitErr) {
+			message += ": " + limitErr.Error()
+		}
+		return nil, &Error{Kind: ErrorInvalidResponse, FeedID: feed.ID, StatusCode: resp.StatusCode, Message: message, Err: err}
 	}
 	if resp.StatusCode != http.StatusOK {
-		message := strings.TrimSpace(string(body))
-		if message != "" && len(message) <= 300 {
-			if headerName == "" {
-				return nil, fmt.Errorf("unauthenticated request: GTFS Realtime API error (%d): %s", resp.StatusCode, message)
-			}
-			return nil, fmt.Errorf("%s header: GTFS Realtime API error (%d): %s", headerName, resp.StatusCode, message)
-		}
-		if headerName == "" {
-			return nil, fmt.Errorf("unauthenticated request: GTFS Realtime API error (%d)", resp.StatusCode)
-		}
-		return nil, fmt.Errorf("%s header: GTFS Realtime API error (%d)", headerName, resp.StatusCode)
+		return nil, statusError(feed.ID, resp, c.now())
 	}
 
-	var feed gtfs.FeedMessage
-	if err := proto.Unmarshal(body, &feed); err != nil {
-		return nil, fmt.Errorf("decoding GTFS Realtime feed: %w", err)
+	var message gtfs.FeedMessage
+	if err := proto.Unmarshal(body, &message); err != nil {
+		return nil, &Error{Kind: ErrorInvalidResponse, FeedID: feed.ID, StatusCode: resp.StatusCode, Message: "decoding GTFS Realtime protobuf", Err: err}
 	}
-	return &feed, nil
+	return NormalizeSnapshot(feed, &message, c.now()), nil
 }
 
-// Vehicles normalizes all vehicle-position entities in a feed.
-func Vehicles(feed *gtfs.FeedMessage) []Vehicle {
-	if feed == nil {
-		return nil
+func validateFeed(feed Feed) error {
+	if strings.TrimSpace(feed.ID) == "" {
+		return &Error{Kind: ErrorInvalidRequest, Message: "feed ID is required"}
 	}
-	vehicles := make([]Vehicle, 0, len(feed.GetEntity()))
-	for _, entity := range feed.GetEntity() {
-		pos := entity.GetVehicle()
-		if pos == nil {
-			continue
-		}
-		trip := pos.GetTrip()
-		desc := pos.GetVehicle()
-		vehicle := Vehicle{
-			EntityID:     entity.GetId(),
-			TripID:       trip.GetTripId(),
-			RouteID:      trip.GetRouteId(),
-			StartDate:    trip.GetStartDate(),
-			StartTime:    trip.GetStartTime(),
-			VehicleID:    desc.GetId(),
-			Label:        desc.GetLabel(),
-			LicensePlate: desc.GetLicensePlate(),
-			StopID:       pos.GetStopId(),
-		}
-		if pos.CurrentStatus != nil {
-			vehicle.CurrentStatus = pos.GetCurrentStatus().String()
-		}
-		if pos.OccupancyStatus != nil {
-			vehicle.OccupancyStatus = pos.GetOccupancyStatus().String()
-		}
-		if ts := pos.GetTimestamp(); ts > 0 {
-			vehicle.TimestampUTC = time.Unix(int64(ts), 0).UTC().Format(time.RFC3339)
-		}
-		if p := pos.GetPosition(); p != nil {
-			if p.Latitude != nil {
-				lat := float64(p.GetLatitude())
-				vehicle.Latitude = &lat
-			}
-			if p.Longitude != nil {
-				lng := float64(p.GetLongitude())
-				vehicle.Longitude = &lng
-			}
-			if p.Bearing != nil {
-				bearing := float64(p.GetBearing())
-				vehicle.Bearing = &bearing
-			}
-			if p.Speed != nil {
-				speed := float64(p.GetSpeed())
-				vehicle.Speed = &speed
-			}
-		}
-		vehicles = append(vehicles, vehicle)
+	parsed, err := url.Parse(feed.URL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		return &Error{Kind: ErrorInvalidRequest, FeedID: feed.ID, Message: "feed URL must be absolute HTTP(S)"}
 	}
-	return vehicles
-}
-
-// FindByRunRef returns the first vehicle whose GTFS-R trip id matches a PTV run_ref.
-func FindByRunRef(feed *gtfs.FeedMessage, runRef string) *Vehicle {
-	runRef = normalize(runRef)
-	if runRef == "" {
-		return nil
-	}
-	for _, vehicle := range Vehicles(feed) {
-		if normalize(vehicle.TripID) == runRef || normalize(vehicle.EntityID) == runRef {
-			return &vehicle
-		}
+	if feed.Authentication.Header != KeyIDHeader {
+		return &Error{Kind: ErrorInvalidRequest, FeedID: feed.ID, Message: "unsupported feed authentication contract"}
 	}
 	return nil
 }
 
-// FindByVehicleID returns the first vehicle whose public or internal vehicle id matches query.
-func FindByVehicleID(feed *gtfs.FeedMessage, query string) *Vehicle {
-	query = normalize(query)
-	if query == "" {
-		return nil
+func readBounded(reader io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("invalid response limit %d", limit)
 	}
-	for _, vehicle := range Vehicles(feed) {
-		for _, candidate := range []string{vehicle.VehicleID, vehicle.Label, vehicle.LicensePlate} {
-			if vehicleIdentifierMatches(candidate, query) {
-				return &vehicle
-			}
-		}
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	if int64(len(body)) > limit {
+		return nil, &responseLimitError{limit: limit}
+	}
+	return body, nil
 }
 
-func vehicleIdentifierMatches(candidate, query string) bool {
-	candidate = normalize(candidate)
-	if candidate == "" || query == "" {
-		return false
-	}
-	if candidate == query {
-		return true
-	}
-	for _, part := range strings.FieldsFunc(candidate, func(r rune) bool {
-		return r == '-' || r == ' ' || r == ',' || r == '/'
-	}) {
-		if part == query {
-			return true
-		}
-	}
-	return false
+type responseLimitError struct {
+	limit int64
 }
 
-func normalize(s string) string {
-	return strings.ToUpper(strings.TrimSpace(s))
+func (e *responseLimitError) Error() string {
+	return fmt.Sprintf("response exceeds %d-byte limit", e.limit)
+}
+
+func statusError(feedID string, resp *http.Response, now time.Time) error {
+	// Upstream error bodies are deliberately not exposed. Some gateways echo
+	// request headers, which would turn a KeyID into a CLI warning or JSON field.
+	message := http.StatusText(resp.StatusCode)
+	if message == "" {
+		message = "unexpected upstream HTTP status"
+	}
+	kind := ErrorHTTP
+	switch resp.StatusCode {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		kind = ErrorInvalidRequest
+	case http.StatusUnauthorized, http.StatusForbidden:
+		kind = ErrorAuthentication
+	case http.StatusNotFound:
+		kind = ErrorNotFound
+	case http.StatusTooManyRequests:
+		kind = ErrorRateLimit
+	default:
+		if resp.StatusCode >= 500 {
+			kind = ErrorUpstream
+		}
+	}
+	return &Error{
+		Kind:       kind,
+		FeedID:     feedID,
+		StatusCode: resp.StatusCode,
+		Message:    message,
+		RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), now),
+	}
+}
+
+func classifyTransportError(ctx context.Context, feedID string, err error) error {
+	switch {
+	case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, context.Canceled):
+		return &Error{Kind: ErrorCanceled, FeedID: feedID, Message: "request canceled", Err: context.Canceled}
+	case errors.Is(ctx.Err(), context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
+		return &Error{Kind: ErrorTimeout, FeedID: feedID, Message: "request timed out", Err: context.DeadlineExceeded}
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return &Error{Kind: ErrorTimeout, FeedID: feedID, Message: "request timed out", Err: errors.New("network timeout")}
+	}
+	return &Error{Kind: ErrorTransport, FeedID: feedID, Message: "request failed", Err: safeTransportError(err)}
+}
+
+func safeTransportError(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return errors.New(urlErr.Err.Error())
+	}
+	return errors.New(err.Error())
+}
+
+func parseRetryAfter(raw string, now time.Time) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	var wait time.Duration
+	if seconds, err := strconv.Atoi(raw); err == nil {
+		if seconds > 0 {
+			wait = time.Duration(seconds) * time.Second
+		}
+	} else if when, err := http.ParseTime(raw); err == nil && when.After(now) {
+		wait = when.Sub(now)
+	}
+	if wait > maximumRetryAfter {
+		return maximumRetryAfter
+	}
+	return wait
 }

@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/thesammykins/ptv_cli/internal/config"
@@ -49,8 +51,9 @@ It uses the PTV Timetable API (real-time departures, disruptions, line and
 station information) together with the PTV GTFS feed (multi-modal journey
 planning) to bring Transit-app style functionality to the terminal.
 
-Credentials are read from PTV_API_KEY and PTV_API_USERID (environment) or the
-OS keyring populated by 'ptv auth login'.`,
+Networked Timetable commands read PTV_API_KEY and PTV_API_USERID from the
+environment, OS keyring, or an explicit --env-file. Local GTFS management and
+core journey planning do not require those credentials.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	Version:       version,
@@ -76,14 +79,16 @@ var versionCmd = &cobra.Command{
 
 // Execute runs the root command.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	execCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := rootCmd.ExecuteContext(execCtx); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
 
 func init() {
-	rootCmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "output raw JSON")
+	rootCmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "output normalized JSON")
 	rootCmd.PersistentFlags().IntVar(&flagLimit, "limit", 0, "limit number of displayed results (0 = API default)")
 	rootCmd.PersistentFlags().StringVar(&flagEnv, "env-file", "", "explicit dotenv file to load (not read by default)")
 	rootCmd.SetVersionTemplate("ptv {{.Version}}\n")
@@ -92,21 +97,31 @@ func init() {
 
 // loadClient resolves config and constructs an API client.
 func loadClient() (*ptvapi.Client, *config.Config, error) {
-	cfg, err := loadConfig()
+	runtimeCfg, err := loadRuntimeConfig()
 	if err != nil {
 		return nil, nil, err
+	}
+	credentials, err := config.LoadPTVCredentialsWithOptions(config.LoadOptions{EnvFile: flagEnv})
+	if err != nil {
+		return nil, nil, err
+	}
+	cfg := &config.Config{
+		APIKey:              credentials.APIKey,
+		DevID:               credentials.DevID,
+		BaseURL:             runtimeCfg.BaseURL,
+		GTFSURL:             runtimeCfg.GTFSURL,
+		GeocoderURL:         runtimeCfg.GeocoderURL,
+		GeocoderProvider:    runtimeCfg.GeocoderProvider,
+		GeocoderAttribution: runtimeCfg.GeocoderAttribution,
+		DataDir:             runtimeCfg.DataDir,
+		CredentialSource:    credentials.Source,
 	}
 	return ptvapi.New(cfg.BaseURL, cfg.APIKey, cfg.DevID), cfg, nil
 }
 
-func loadConfig() (*config.Config, error) {
-	return config.LoadWithOptions(config.LoadOptions{EnvFile: flagEnv})
-}
-
-// ctx returns a background context for command execution.
-func ctx() context.Context { return context.Background() }
-
-// defaultBaseURL resolves the API base URL without requiring credentials.
-func defaultBaseURL() string {
-	return config.DefaultBaseURLWithOptions(config.LoadOptions{EnvFile: flagEnv})
+// loadRuntimeConfig resolves only non-secret paths and endpoints. Local GTFS
+// and planning commands must use this entry point so they do not consult or
+// require either credential capability.
+func loadRuntimeConfig() (*config.RuntimeConfig, error) {
+	return config.LoadRuntimeWithOptions(config.LoadOptions{EnvFile: flagEnv})
 }

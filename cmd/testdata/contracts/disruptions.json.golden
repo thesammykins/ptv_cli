@@ -1,0 +1,46 @@
+{
+  "disruptions": {
+    "metro_train": [
+      {
+        "disruption_id": 91,
+        "ptv_disruption_id": 91,
+        "title": "Track works",
+        "url": "https://example.test/works",
+        "description": "Buses replace trains",
+        "disruption_status": "Current",
+        "disruption_type": "Planned",
+        "published_on": "2026-07-16T08:00:00+10:00",
+        "last_updated": "2026-07-16T09:00:00+10:00",
+        "from_date": "2026-07-16T10:00:00+10:00",
+        "to_date": "2026-07-17T10:00:00+10:00",
+        "routes": [
+          {
+            "route_type": 0,
+            "route_id": 1,
+            "ptv_route_id": 1,
+            "route_name": "Alamein",
+            "route_number": "ALM",
+            "direction": {
+              "direction_id": 2,
+              "ptv_direction_id": 2,
+              "direction_name": "City"
+            }
+          }
+        ],
+        "stops": [
+          {
+            "route_type": 0,
+            "stop_id": 10,
+            "ptv_stop_id": 10,
+            "stop_name": "Richmond"
+          }
+        ]
+      }
+    ]
+  },
+  "status": {
+    "version": "3.0",
+    "health": 1
+  },
+  "time_zone": "Australia/Melbourne"
+}

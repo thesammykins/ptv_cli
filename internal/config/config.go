@@ -35,6 +35,13 @@ type Config struct {
 	BaseURL string
 	// GTFSURL is the location of the PTV GTFS static feed.
 	GTFSURL string
+	// GeocoderURL is the configured geocoding search endpoint.
+	GeocoderURL string
+	// GeocoderProvider is the user-visible identity of the configured provider.
+	GeocoderProvider string
+	// GeocoderAttribution is emitted when configured-provider data contributes
+	// to command output.
+	GeocoderAttribution string
 	// OpenDataKeyID is the optional Transport Victoria Open Data subscription key used for GTFS Realtime feeds.
 	OpenDataKeyID string
 	// OpenDataAPIID is the optional Transport Victoria Open Data platform API token.
@@ -45,9 +52,30 @@ type Config struct {
 	CredentialSource CredentialSource
 }
 
+// RuntimeConfig contains non-secret settings shared by local and networked
+// commands. Loading it never consults credential stores or requires credentials.
+type RuntimeConfig struct {
+	BaseURL             string
+	GTFSURL             string
+	GeocoderURL         string
+	GeocoderProvider    string
+	GeocoderAttribution string
+	DataDir             string
+}
+
+// PTVCredentials are the credentials required to sign Timetable API requests.
+type PTVCredentials struct {
+	APIKey string
+	DevID  string
+	Source CredentialSource
+}
+
 const (
-	defaultBaseURL = "https://timetableapi.ptv.vic.gov.au"
-	defaultGTFSURL = "https://data.ptv.vic.gov.au/downloads/gtfs.zip"
+	defaultBaseURL             = "https://timetableapi.ptv.vic.gov.au"
+	defaultGTFSURL             = "https://data.ptv.vic.gov.au/downloads/gtfs.zip"
+	defaultGeocoderURL         = "https://nominatim.openstreetmap.org/search"
+	defaultGeocoderProvider    = "OpenStreetMap Nominatim"
+	defaultGeocoderAttribution = "© OpenStreetMap contributors"
 )
 
 // ErrMissingCredentials indicates no credentials were found in any configured
@@ -70,29 +98,92 @@ func Load() (*Config, error) {
 	return LoadWithOptions(LoadOptions{})
 }
 
+// LoadRuntime resolves non-secret runtime configuration without requiring or
+// consulting credentials.
+func LoadRuntime() (*RuntimeConfig, error) {
+	return LoadRuntimeWithOptions(LoadOptions{})
+}
+
+// LoadPTVCredentials resolves only Timetable API credentials.
+func LoadPTVCredentials() (PTVCredentials, error) {
+	return LoadPTVCredentialsWithOptions(LoadOptions{})
+}
+
 // LoadWithOptions resolves configuration with optional explicit dotenv support.
 func LoadWithOptions(opts LoadOptions) (*Config, error) {
+	runtimeCfg, err := LoadRuntimeWithOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	ptvCreds, err := LoadPTVCredentialsWithOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	openData, err := OpenDataCredentialsWithOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	cfg := &Config{
+		APIKey:              ptvCreds.APIKey,
+		DevID:               ptvCreds.DevID,
+		BaseURL:             runtimeCfg.BaseURL,
+		GTFSURL:             runtimeCfg.GTFSURL,
+		GeocoderURL:         runtimeCfg.GeocoderURL,
+		GeocoderProvider:    runtimeCfg.GeocoderProvider,
+		GeocoderAttribution: runtimeCfg.GeocoderAttribution,
+		OpenDataKeyID:       openData.KeyID,
+		OpenDataAPIID:       openData.APIID,
+		DataDir:             runtimeCfg.DataDir,
+		CredentialSource:    ptvCreds.Source,
+	}
+	return cfg, nil
+}
+
+// LoadRuntimeWithOptions resolves non-secret runtime configuration. It is the
+// correct entry point for local GTFS, status, catalog, and offline plan flows.
+func LoadRuntimeWithOptions(opts LoadOptions) (*RuntimeConfig, error) {
 	env, err := loadEnvFile(opts.EnvFile)
 	if err != nil {
 		return nil, err
 	}
-
-	cfg := &Config{
-		BaseURL: firstNonEmpty(os.Getenv("PTV_BASE_URL"), env["PTV_BASE_URL"], defaultBaseURL),
-		GTFSURL: firstNonEmpty(os.Getenv("PTV_GTFS_URL"), env["PTV_GTFS_URL"], defaultGTFSURL),
-		DataDir: firstNonEmpty(os.Getenv("PTV_DATA_DIR"), env["PTV_DATA_DIR"], defaultDataDir()),
+	geocoderURL := firstNonEmpty(os.Getenv("PTV_GEOCODER_URL"), env["PTV_GEOCODER_URL"], defaultGeocoderURL)
+	providerDefault := "Configured geocoder"
+	attributionDefault := ""
+	if geocoderURL == defaultGeocoderURL {
+		providerDefault = defaultGeocoderProvider
+		attributionDefault = defaultGeocoderAttribution
+	}
+	cfg := &RuntimeConfig{
+		BaseURL:             firstNonEmpty(os.Getenv("PTV_BASE_URL"), env["PTV_BASE_URL"], defaultBaseURL),
+		GTFSURL:             firstNonEmpty(os.Getenv("PTV_GTFS_URL"), env["PTV_GTFS_URL"], defaultGTFSURL),
+		GeocoderURL:         geocoderURL,
+		GeocoderProvider:    firstNonEmpty(os.Getenv("PTV_GEOCODER_PROVIDER"), env["PTV_GEOCODER_PROVIDER"], providerDefault),
+		GeocoderAttribution: firstNonEmpty(os.Getenv("PTV_GEOCODER_ATTRIBUTION"), env["PTV_GEOCODER_ATTRIBUTION"], attributionDefault),
+		DataDir:             firstNonEmpty(os.Getenv("PTV_DATA_DIR"), env["PTV_DATA_DIR"], defaultDataDir()),
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-
-	cfg.resolveCredentials(env)
-	cfg.resolveOpenDataCredentials(env)
-
-	if cfg.APIKey == "" || cfg.DevID == "" {
-		return nil, fmt.Errorf("%w: run 'ptv auth login' to store them securely, or set PTV_API_KEY and PTV_API_USERID", ErrMissingCredentials)
-	}
 	return cfg, nil
+}
+
+// LoadPTVCredentialsWithOptions resolves only Timetable API credentials using
+// environment, OS keyring, then an explicitly supplied dotenv file.
+func LoadPTVCredentialsWithOptions(opts LoadOptions) (PTVCredentials, error) {
+	env, err := loadEnvFile(opts.EnvFile)
+	if err != nil {
+		return PTVCredentials{}, err
+	}
+	if key, devID := os.Getenv("PTV_API_KEY"), os.Getenv("PTV_API_USERID"); key != "" && devID != "" {
+		return PTVCredentials{APIKey: key, DevID: devID, Source: SourceEnv}, nil
+	}
+	if creds, err := loadKeyring(); err == nil && creds.APIKey != "" && creds.DevID != "" {
+		return PTVCredentials{APIKey: creds.APIKey, DevID: creds.DevID, Source: SourceKeyring}, nil
+	}
+	if key, devID := env["PTV_API_KEY"], env["PTV_API_USERID"]; key != "" && devID != "" {
+		return PTVCredentials{APIKey: key, DevID: devID, Source: SourceDotEnv}, nil
+	}
+	return PTVCredentials{}, fmt.Errorf("%w: run 'ptv auth login' to store them securely, or set PTV_API_KEY and PTV_API_USERID", ErrMissingCredentials)
 }
 
 // OpenDataCredentialsWithOptions resolves optional Transport Victoria Open Data
@@ -114,57 +205,14 @@ func OpenDataCredentialsWithOptions(opts LoadOptions) (credstore.OpenDataCredent
 	return credstore.OpenDataCredentials{}, nil
 }
 
-// resolveCredentials fills in APIKey/DevID using the priority order
-// environment > OS keyring > explicit dotenv, recording the source used.
-func (c *Config) resolveCredentials(env map[string]string) {
-	if k, d := os.Getenv("PTV_API_KEY"), os.Getenv("PTV_API_USERID"); k != "" && d != "" {
-		c.APIKey, c.DevID, c.CredentialSource = k, d, SourceEnv
-		return
-	}
-	if creds, err := loadKeyring(); err == nil {
-		c.APIKey, c.DevID, c.CredentialSource = creds.APIKey, creds.DevID, SourceKeyring
-		return
-	}
-	if k, d := env["PTV_API_KEY"], env["PTV_API_USERID"]; k != "" && d != "" {
-		c.APIKey, c.DevID, c.CredentialSource = k, d, SourceDotEnv
-		return
-	}
-	c.CredentialSource = SourceNone
-}
-
-// resolveOpenDataCredentials fills in optional GTFS Realtime credentials using
-// environment > OS keyring > explicit dotenv.
-func (c *Config) resolveOpenDataCredentials(env map[string]string) {
-	creds, err := OpenDataCredentialsWithOptions(LoadOptions{})
-	if err == nil && creds.KeyID != "" {
-		c.OpenDataKeyID = creds.KeyID
-		c.OpenDataAPIID = creds.APIID
-		return
-	}
-	if keyID := firstNonEmpty(env["PTV_OPENDATA_KEY_ID"], env["PTV_OPENDATA_KEYID"]); keyID != "" {
-		c.OpenDataKeyID = keyID
-		c.OpenDataAPIID = env["PTV_OPENDATA_API_ID"]
-	}
-}
-
-// DefaultBaseURL resolves the API base URL without requiring credentials.
-func DefaultBaseURL() string {
-	return DefaultBaseURLWithOptions(LoadOptions{})
-}
-
-// DefaultBaseURLWithOptions resolves the API base URL with optional explicit
-// dotenv support.
-func DefaultBaseURLWithOptions(opts LoadOptions) string {
-	env, _ := loadEnvFile(opts.EnvFile)
-	base := firstNonEmpty(os.Getenv("PTV_BASE_URL"), env["PTV_BASE_URL"], defaultBaseURL)
-	if err := validateHTTPSURL("PTV_BASE_URL", base); err != nil {
-		return defaultBaseURL
-	}
-	return base
-}
-
 // DBPath returns the path to the local GTFS SQLite database.
 func (c *Config) DBPath() string {
+	return filepath.Join(c.DataDir, "gtfs.sqlite")
+}
+
+// DBPath returns the legacy fixed database path. Generation-aware store code
+// may resolve a current manifest beneath DataDir instead.
+func (c *RuntimeConfig) DBPath() string {
 	return filepath.Join(c.DataDir, "gtfs.sqlite")
 }
 
@@ -234,10 +282,28 @@ func (c *Config) validate() error {
 	return nil
 }
 
+func (c *RuntimeConfig) validate() error {
+	if err := validateHTTPSURL("PTV_BASE_URL", c.BaseURL); err != nil {
+		return err
+	}
+	if err := validateHTTPSURL("PTV_GTFS_URL", c.GTFSURL); err != nil {
+		return err
+	}
+	if err := validateHTTPSURL("PTV_GEOCODER_URL", c.GeocoderURL); err != nil {
+		return err
+	}
+	dataDir, err := validateDataDir(c.DataDir)
+	if err != nil {
+		return err
+	}
+	c.DataDir = dataDir
+	return nil
+}
+
 func validateHTTPSURL(name, raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		return fmt.Errorf("invalid %s %q", name, raw)
+		return fmt.Errorf("invalid %s URL", name)
 	}
 	if u.Scheme == "https" {
 		return nil
@@ -257,18 +323,44 @@ func isLocalhost(host string) bool {
 }
 
 func validateDataDir(path string) (string, error) {
-	if strings.TrimSpace(path) == "" {
+	raw := strings.TrimSpace(path)
+	if raw == "" {
 		return "", fmt.Errorf("PTV_DATA_DIR is empty")
 	}
-	abs, err := filepath.Abs(path)
+	if isPortableFilesystemRoot(raw) {
+		return "", fmt.Errorf("PTV_DATA_DIR must not be filesystem root")
+	}
+	abs, err := filepath.Abs(raw)
 	if err != nil {
 		return "", err
 	}
 	clean := filepath.Clean(abs)
-	if clean == string(filepath.Separator) {
+	if clean == string(filepath.Separator) || clean == filepath.VolumeName(clean)+string(filepath.Separator) {
 		return "", fmt.Errorf("PTV_DATA_DIR must not be filesystem root")
 	}
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		resolved = filepath.Clean(resolved)
+		if resolved == string(filepath.Separator) || resolved == filepath.VolumeName(resolved)+string(filepath.Separator) {
+			return "", fmt.Errorf("PTV_DATA_DIR must not resolve to filesystem root")
+		}
+	}
 	return clean, nil
+}
+
+func isPortableFilesystemRoot(raw string) bool {
+	normalized := strings.ReplaceAll(raw, "\\", "/")
+	if normalized == "/" {
+		return true
+	}
+	withoutTrailing := strings.TrimRight(normalized, "/")
+	if len(withoutTrailing) == 2 && withoutTrailing[1] == ':' && ((withoutTrailing[0] >= 'A' && withoutTrailing[0] <= 'Z') || (withoutTrailing[0] >= 'a' && withoutTrailing[0] <= 'z')) {
+		return true
+	}
+	if strings.HasPrefix(normalized, "//") {
+		parts := strings.FieldsFunc(normalized[2:], func(r rune) bool { return r == '/' })
+		return len(parts) <= 2 // UNC server/share root or an incomplete UNC path.
+	}
+	return false
 }
 
 func firstNonEmpty(vals ...string) string {

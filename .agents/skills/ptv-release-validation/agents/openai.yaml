@@ -1,0 +1,4 @@
+interface:
+  display_name: "PTV Release Validation"
+  short_description: "Validate published PTV CLI release artifacts"
+  default_prompt: "Use $ptv-release-validation to verify a published PTV CLI artifact and report release regressions with reproducible evidence."

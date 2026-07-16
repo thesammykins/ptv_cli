@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,8 +25,9 @@ func newModeCommand(use, short string, routeType int) *cobra.Command {
 		Short: short,
 		Long: fmt.Sprintf(`%s
 
-Show a full view of a %s route: its directions, ordered stops and any active
-disruptions. Pass a route number (e.g. "109") or a route name.
+Show a full view of a %s route: its directions, stops ordered where PTV supplies
+a sequence, and any active disruptions. Pass a route number (e.g. "109") or a
+route name.
 
 Subcommands:
 	%s lines              list all %s routes
@@ -40,7 +43,7 @@ Subcommands:
 			if err != nil {
 				return err
 			}
-			return runModeShow(client, routeType, joinArgs(args))
+			return runModeShow(cmd.Context(), client, routeType, joinArgs(args))
 		},
 	}
 
@@ -53,7 +56,7 @@ Subcommands:
 			if err != nil {
 				return err
 			}
-			return runModeLines(client, routeType)
+			return runModeLines(cmd.Context(), client, routeType)
 		},
 	})
 
@@ -66,7 +69,7 @@ Subcommands:
 			if err != nil {
 				return err
 			}
-			return runModeNext(client, routeType, joinArgs(args))
+			return runModeNext(cmd.Context(), client, routeType, joinArgs(args))
 		},
 	}
 	nextSub.Flags().StringVar(&nextRoute, "route", "", "filter to a specific route id or name")
@@ -82,49 +85,49 @@ Subcommands:
 			if err != nil {
 				return err
 			}
-			return runDisruptions(client, []int{routeType}, "")
+			return runDisruptions(cmd.Context(), client, []int{routeType}, "")
 		},
 	})
 
 	return cmd
 }
 
-// runModeShow renders a route header, directions, ordered stops and disruptions.
-func runModeShow(client *ptvapi.Client, routeType int, query string) error {
-	route, err := resolveRouteForMode(client, routeType, query)
+// runModeShow renders a route header, directions, sequenced stops and disruptions.
+func runModeShow(ctx context.Context, client *ptvapi.Client, routeType int, query string) error {
+	route, err := resolveRouteForMode(ctx, client, routeType, query)
 	if err != nil {
 		return err
 	}
 
-	dirs, err := client.Directions(ctx(), route.RouteID)
+	dirs, err := client.Directions(ctx, route.RouteID)
 	if err != nil {
 		return err
 	}
 
-	dis, derr := client.DisruptionsForRoute(ctx(), route.RouteID)
+	sortLineDirections(dirs.Directions)
+	dis, derr := client.DisruptionsForRoute(ctx, route.RouteID)
+	if derr != nil {
+		fmt.Fprintln(os.Stderr, "warning: route disruptions are unavailable")
+	}
 
 	if flagJSON {
-		out := map[string]any{
-			"route":      route,
-			"directions": dirs.Directions,
-		}
 		stopsByDir := map[string][]ptvapi.StopModel{}
 		for _, d := range dirs.Directions {
 			dID := d.DirectionID
-			s, serr := client.StopsForRoute(ctx(), route.RouteID, route.RouteType, &dID)
+			s, serr := client.StopsForRoute(ctx, route.RouteID, route.RouteType, &dID)
 			if serr != nil {
 				return serr
 			}
-			stopsByDir[strconv.Itoa(d.DirectionID)] = s.Stops
+			sortStopsBySequence(s.Stops)
+			stopsByDir[strconv.Itoa(d.DirectionID)] = limitStops(s.Stops)
 		}
-		out["stops"] = stopsByDir
-		out["disruptions"] = []ptvapi.Disruption{}
+		disruptions := []ptvapi.Disruption{}
 		if derr == nil {
 			if ds := flattenDisruptions(dis); ds != nil {
-				out["disruptions"] = ds
+				disruptions = ds
 			}
 		}
-		return printJSON(out)
+		return printJSON(newModeShowOutput(*route, dirs.Directions, stopsByDir, disruptions))
 	}
 
 	label := route.RouteName
@@ -147,7 +150,7 @@ func runModeShow(client *ptvapi.Client, routeType int, query string) error {
 
 	if len(dirs.Directions) > 0 {
 		dID := dirs.Directions[0].DirectionID
-		stops, serr := client.StopsForRoute(ctx(), route.RouteID, route.RouteType, &dID)
+		stops, serr := client.StopsForRoute(ctx, route.RouteID, route.RouteType, &dID)
 		if serr != nil {
 			return serr
 		}
@@ -156,7 +159,7 @@ func runModeShow(client *ptvapi.Client, routeType int, query string) error {
 		fmt.Printf("Stops (towards %s)\n", render.CleanText(dirs.Directions[0].DirectionName))
 		st := render.NewTable("SEQ", "ID", "STOP", "SUBURB")
 		for _, s := range stops.Stops {
-			st.Row(s.StopSequence, s.StopID, s.StopName, s.StopSuburb)
+			st.Row(stopSequenceLabel(s.StopSequence), s.StopID, s.StopName, s.StopSuburb)
 		}
 		if err := st.Flush(); err != nil {
 			return err
@@ -179,33 +182,31 @@ func runModeShow(client *ptvapi.Client, routeType int, query string) error {
 }
 
 // runModeLines lists all routes for a mode.
-func runModeLines(client *ptvapi.Client, routeType int) error {
-	resp, err := client.Routes(ctx(), []int{routeType}, "")
+func runModeLines(ctx context.Context, client *ptvapi.Client, routeType int) error {
+	resp, err := client.Routes(ctx, []int{routeType}, "")
 	if err != nil {
 		return err
 	}
+	sortLineRoutes(resp.Routes)
 	resp.Routes = limitRoutes(resp.Routes)
+	output := newModeLinesOutput(resp)
 	if flagJSON {
-		return printJSON(resp)
+		return printJSON(output)
 	}
-	routes := resp.Routes
-	sort.Slice(routes, func(i, j int) bool {
-		return routes[i].RouteName < routes[j].RouteName
-	})
 	t := render.NewTable("ID", "NUMBER", "NAME")
-	for _, r := range routes {
+	for _, r := range output.Routes {
 		t.Row(r.RouteID, r.RouteNumber, r.RouteName)
 	}
 	if err := t.Flush(); err != nil {
 		return err
 	}
-	fmt.Printf("\n%d %s routes\n", len(routes), routeTypeName(routeType))
+	fmt.Printf("\n%d %s routes\n", len(output.Routes), routeTypeName(routeType))
 	return nil
 }
 
 // runModeNext shows live departures from a stop, scoped to the mode.
-func runModeNext(client *ptvapi.Client, routeType int, query string) error {
-	stop, err := resolveStop(client, query, []int{routeType})
+func runModeNext(ctx context.Context, client *ptvapi.Client, routeType int, query string) error {
+	stop, err := resolveStopContext(ctx, client, query, []int{routeType})
 	if err != nil {
 		return err
 	}
@@ -215,13 +216,16 @@ func runModeNext(client *ptvapi.Client, routeType int, query string) error {
 		Expand:     []string{ptvapi.ExpandRoute, ptvapi.ExpandRun, ptvapi.ExpandDirection, ptvapi.ExpandDisruption},
 	}
 	if nextRoute != "" {
-		route, rerr := resolveRouteWithTypes(client, nextRoute, []int{routeType})
+		route, rerr := resolveRouteWithTypesContext(ctx, client, nextRoute, []int{routeType})
 		if rerr != nil {
+			return rerr
+		}
+		if rerr := ensureRouteServesStop(ctx, client, stop, route); rerr != nil {
 			return rerr
 		}
 		opts.RouteID = route.RouteID
 	}
-	resp, err := client.Departures(ctx(), routeType, stop.StopID, opts)
+	resp, err := client.Departures(ctx, routeType, stop.StopID, opts)
 	if err != nil {
 		return err
 	}
@@ -229,13 +233,11 @@ func runModeNext(client *ptvapi.Client, routeType int, query string) error {
 	if nextPlatform != "" {
 		deps = filterPlatform(deps, nextPlatform)
 	}
-	sort.Slice(deps, func(i, j int) bool {
-		return departureSort(deps[i]) < departureSort(deps[j])
-	})
+	sortDepartures(deps)
 	deps = limitDepartures(deps)
 	resp.Departures = deps
 	if flagJSON {
-		return printJSON(resp)
+		return printJSON(newNextOutput(resp))
 	}
 
 	stopName := stop.StopName
@@ -279,12 +281,129 @@ func runModeNext(client *ptvapi.Client, routeType int, query string) error {
 	return nil
 }
 
+type modeShowOutput struct {
+	Route       modeRouteOutput             `json:"route"`
+	Directions  []modeDirectionOutput       `json:"directions"`
+	Stops       map[string][]modeStopOutput `json:"stops"`
+	Disruptions []disruptionOutput          `json:"disruptions"`
+	TimeZone    string                      `json:"time_zone"`
+}
+
+type modeLinesOutput struct {
+	Routes []modeRouteOutput `json:"routes"`
+	Route  *modeRouteOutput  `json:"route"`
+	Status modeStatusOutput  `json:"status"`
+}
+
+type modeRouteOutput struct {
+	RouteType   int    `json:"route_type"`
+	RouteID     int    `json:"route_id"`
+	PTVRouteID  int    `json:"ptv_route_id"`
+	RouteName   string `json:"route_name"`
+	RouteNumber string `json:"route_number"`
+	RouteGTFSID string `json:"route_gtfs_id,omitempty"`
+}
+
+type modeDirectionOutput struct {
+	DirectionID               int    `json:"direction_id"`
+	PTVDirectionID            int    `json:"ptv_direction_id"`
+	DirectionName             string `json:"direction_name"`
+	RouteDirectionDescription string `json:"route_direction_description,omitempty"`
+	RouteID                   int    `json:"route_id"`
+	PTVRouteID                int    `json:"ptv_route_id"`
+	RouteType                 int    `json:"route_type"`
+}
+
+type modeStopOutput struct {
+	StopID        int     `json:"stop_id"`
+	PTVStopID     int     `json:"ptv_stop_id"`
+	StopName      string  `json:"stop_name"`
+	StopSuburb    string  `json:"stop_suburb"`
+	RouteType     int     `json:"route_type"`
+	StopLatitude  float64 `json:"stop_latitude"`
+	StopLongitude float64 `json:"stop_longitude"`
+	StopLandmark  string  `json:"stop_landmark,omitempty"`
+	StopDistance  float64 `json:"stop_distance,omitempty"`
+	StopSequence  int     `json:"stop_sequence"`
+}
+
+type modeStatusOutput struct {
+	Version string `json:"version"`
+	Health  int    `json:"health"`
+}
+
+func newModeShowOutput(
+	route ptvapi.Route,
+	directions []ptvapi.Direction,
+	stops map[string][]ptvapi.StopModel,
+	disruptions []ptvapi.Disruption,
+) modeShowOutput {
+	output := modeShowOutput{
+		Route:       newModeRouteOutput(route),
+		Directions:  make([]modeDirectionOutput, 0, len(directions)),
+		Stops:       make(map[string][]modeStopOutput, len(stops)),
+		Disruptions: make([]disruptionOutput, 0, len(disruptions)),
+		TimeZone:    commandTimeZone,
+	}
+	for _, direction := range directions {
+		output.Directions = append(output.Directions, modeDirectionOutput{
+			DirectionID: direction.DirectionID, PTVDirectionID: direction.DirectionID,
+			DirectionName:             normalizedText(direction.DirectionName),
+			RouteDirectionDescription: normalizedText(direction.RouteDirectionDescription),
+			RouteID:                   direction.RouteID, PTVRouteID: direction.RouteID, RouteType: direction.RouteType,
+		})
+	}
+	for key, values := range stops {
+		items := make([]modeStopOutput, 0, len(values))
+		for _, stop := range values {
+			items = append(items, modeStopOutput{
+				StopID: stop.StopID, PTVStopID: stop.StopID,
+				StopName: normalizedText(stop.StopName), StopSuburb: normalizedText(stop.StopSuburb),
+				RouteType: stop.RouteType, StopLatitude: stop.StopLatitude, StopLongitude: stop.StopLongitude,
+				StopLandmark: normalizedText(stop.StopLandmark), StopDistance: stop.StopDistance,
+				StopSequence: stop.StopSequence,
+			})
+		}
+		output.Stops[key] = items
+	}
+	for _, disruption := range disruptions {
+		output.Disruptions = append(output.Disruptions, newDisruptionOutput(disruption))
+	}
+	return output
+}
+
+func newModeLinesOutput(response *ptvapi.RouteResponse) modeLinesOutput {
+	output := modeLinesOutput{
+		Routes: make([]modeRouteOutput, 0, len(response.Routes)),
+		Status: modeStatusOutput{
+			Version: normalizedText(response.Status.Version),
+			Health:  response.Status.Health,
+		},
+	}
+	for _, route := range response.Routes {
+		output.Routes = append(output.Routes, newModeRouteOutput(route))
+	}
+	if response.Route != nil {
+		route := newModeRouteOutput(*response.Route)
+		output.Route = &route
+	}
+	return output
+}
+
+func newModeRouteOutput(route ptvapi.Route) modeRouteOutput {
+	return modeRouteOutput{
+		RouteType: route.RouteType, RouteID: route.RouteID, PTVRouteID: route.RouteID,
+		RouteName: normalizedText(route.RouteName), RouteNumber: normalizedText(route.RouteNumber),
+		RouteGTFSID: normalizedText(route.RouteGTFSID),
+	}
+}
+
 // resolveRouteForMode resolves a route constrained to a route_type, matching by
 // route number or name. Pulls the mode's route list once and matches locally so
 // numeric tram/bus route *numbers* aren't confused with route ids.
-func resolveRouteForMode(client *ptvapi.Client, routeType int, query string) (*ptvapi.Route, error) {
+func resolveRouteForMode(ctx context.Context, client *ptvapi.Client, routeType int, query string) (*ptvapi.Route, error) {
 	query = strings.TrimSpace(query)
-	resp, err := client.Routes(ctx(), []int{routeType}, "")
+	resp, err := client.Routes(ctx, []int{routeType}, "")
 	if err != nil {
 		return nil, err
 	}
@@ -345,17 +464,42 @@ func flattenDisruptions(resp *ptvapi.DisruptionsResponse) []ptvapi.Disruption {
 	if resp == nil {
 		return nil
 	}
-	var out []ptvapi.Disruption
-	seen := map[int64]bool{}
+	var candidates []ptvapi.Disruption
 	for _, list := range resp.Disruptions {
-		for _, d := range list {
-			if seen[d.DisruptionID] {
-				continue
-			}
-			seen[d.DisruptionID] = true
-			out = append(out, d)
-		}
+		candidates = append(candidates, list...)
 	}
+	// Sort before de-duplication so map iteration cannot decide which copy of a
+	// repeated PTV disruption wins.
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].DisruptionID != candidates[j].DisruptionID {
+			return candidates[i].DisruptionID < candidates[j].DisruptionID
+		}
+		if candidates[i].LastUpdated != candidates[j].LastUpdated {
+			return candidates[i].LastUpdated > candidates[j].LastUpdated
+		}
+		if candidates[i].FromDate != candidates[j].FromDate {
+			return candidates[i].FromDate < candidates[j].FromDate
+		}
+		return normalizedText(candidates[i].Title) < normalizedText(candidates[j].Title)
+	})
+	seen := make(map[int64]bool, len(candidates))
+	out := make([]ptvapi.Disruption, 0, len(candidates))
+	for _, disruption := range candidates {
+		if seen[disruption.DisruptionID] {
+			continue
+		}
+		seen[disruption.DisruptionID] = true
+		out = append(out, disruption)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].FromDate != out[j].FromDate {
+			return out[i].FromDate < out[j].FromDate
+		}
+		if normalizedText(out[i].Title) != normalizedText(out[j].Title) {
+			return normalizedText(out[i].Title) < normalizedText(out[j].Title)
+		}
+		return out[i].DisruptionID < out[j].DisruptionID
+	})
 	return out
 }
 

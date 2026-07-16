@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/thesammykins/ptv_cli/internal/credstore"
@@ -64,9 +66,75 @@ func TestLoadWithOptionsReadsExplicitEnvFile(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeDoesNotRequireOrConsultCredentials(t *testing.T) {
+	clearConfigEnv(t)
+	originalKeyring := loadKeyring
+	originalOpenData := loadOpenDataKeyring
+	ptvCalls := 0
+	openDataCalls := 0
+	loadKeyring = func() (credstore.Credentials, error) {
+		ptvCalls++
+		return credstore.Credentials{}, credstore.ErrNotFound
+	}
+	loadOpenDataKeyring = func() (credstore.OpenDataCredentials, error) {
+		openDataCalls++
+		return credstore.OpenDataCredentials{}, credstore.ErrNotFound
+	}
+	t.Cleanup(func() {
+		loadKeyring = originalKeyring
+		loadOpenDataKeyring = originalOpenData
+	})
+
+	cfg, err := LoadRuntime()
+	if err != nil {
+		t.Fatalf("LoadRuntime: %v", err)
+	}
+	if cfg.BaseURL == "" || cfg.GTFSURL == "" || cfg.GeocoderURL == "" || cfg.GeocoderProvider == "" || cfg.DataDir == "" {
+		t.Fatalf("LoadRuntime returned incomplete config: %#v", cfg)
+	}
+	if ptvCalls != 0 || openDataCalls != 0 {
+		t.Fatalf("LoadRuntime consulted credential stores: ptv=%d openData=%d", ptvCalls, openDataCalls)
+	}
+}
+
+func TestLoadRuntimeReadsOnlyExplicitDotEnv(t *testing.T) {
+	clearConfigEnv(t)
+	envFile := filepath.Join(t.TempDir(), "runtime.env")
+	if err := os.WriteFile(envFile, []byte("PTV_GTFS_URL=http://localhost:8080/gtfs.zip\nPTV_GEOCODER_URL=http://127.0.0.1:8081/search\nPTV_GEOCODER_PROVIDER=Local geocoder\nPTV_GEOCODER_ATTRIBUTION=Local data\nPTV_DATA_DIR=cache\nPTV_API_KEY=ignored\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadRuntimeWithOptions(LoadOptions{EnvFile: envFile})
+	if err != nil {
+		t.Fatalf("LoadRuntimeWithOptions: %v", err)
+	}
+	if cfg.GTFSURL != "http://localhost:8080/gtfs.zip" {
+		t.Fatalf("GTFSURL = %q", cfg.GTFSURL)
+	}
+	if cfg.GeocoderURL != "http://127.0.0.1:8081/search" {
+		t.Fatalf("GeocoderURL = %q", cfg.GeocoderURL)
+	}
+	if cfg.GeocoderProvider != "Local geocoder" || cfg.GeocoderAttribution != "Local data" {
+		t.Fatalf("geocoder identity = %q / %q", cfg.GeocoderProvider, cfg.GeocoderAttribution)
+	}
+	if !filepath.IsAbs(cfg.DataDir) {
+		t.Fatalf("DataDir = %q, want absolute", cfg.DataDir)
+	}
+}
+
+func TestLoadPTVCredentialsMissingDoesNotAffectRuntime(t *testing.T) {
+	clearConfigEnv(t)
+	withoutKeyring(t)
+	if _, err := LoadPTVCredentials(); !errors.Is(err, ErrMissingCredentials) {
+		t.Fatalf("LoadPTVCredentials error = %v, want ErrMissingCredentials", err)
+	}
+	if _, err := LoadRuntime(); err != nil {
+		t.Fatalf("LoadRuntime with missing credentials: %v", err)
+	}
+}
+
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"PTV_API_KEY", "PTV_API_USERID", "PTV_BASE_URL", "PTV_GTFS_URL", "PTV_DATA_DIR", "PTV_OPENDATA_KEY_ID", "PTV_OPENDATA_KEYID", "PTV_OPENDATA_API_ID"} {
+	for _, key := range []string{"PTV_API_KEY", "PTV_API_USERID", "PTV_BASE_URL", "PTV_GTFS_URL", "PTV_GEOCODER_URL", "PTV_GEOCODER_PROVIDER", "PTV_GEOCODER_ATTRIBUTION", "PTV_DATA_DIR", "PTV_OPENDATA_KEY_ID", "PTV_OPENDATA_KEYID", "PTV_OPENDATA_API_ID"} {
 		t.Setenv(key, "")
 	}
 }
@@ -160,5 +228,49 @@ func TestLoadAllowsHTTPForLocalhost(t *testing.T) {
 
 	if _, err := Load(); err != nil {
 		t.Fatalf("Load rejected localhost HTTP URL: %v", err)
+	}
+}
+
+func TestURLValidationErrorDoesNotEchoCredentialBearingInput(t *testing.T) {
+	const raw = "://source-user:source-pass@example.test/feed?token=source-token"
+	err := validateHTTPSURL("PTV_GTFS_URL", raw)
+	if err == nil {
+		t.Fatal("validateHTTPSURL() error = nil, want invalid URL")
+	}
+	for _, secret := range []string{"source-user", "source-pass", "source-token"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("validation error leaked %q: %v", secret, err)
+		}
+	}
+}
+
+func TestValidateDataDirRejectsPortableRoots(t *testing.T) {
+	for _, value := range []string{"/", `C:\\`, "D:/", `\\\\server\\share`, "//server/share/"} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := validateDataDir(value); err == nil {
+				t.Fatalf("validateDataDir(%q) succeeded", value)
+			}
+		})
+	}
+}
+
+func TestValidateDataDirAllowsPortableSubdirectories(t *testing.T) {
+	for _, value := range []string{`C:\\ptv`, "D:/ptv", `\\\\server\\share\\ptv`} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := validateDataDir(value); err != nil {
+				t.Fatalf("validateDataDir(%q): %v", value, err)
+			}
+		})
+	}
+}
+
+func TestValidateDataDirRejectsSymlinkToRoot(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "root-link")
+	if err := os.Symlink(string(filepath.Separator), link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := validateDataDir(link); err == nil {
+		t.Fatalf("validateDataDir accepted symlink to root")
 	}
 }

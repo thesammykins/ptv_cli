@@ -1,0 +1,4 @@
+interface:
+  display_name: "PTV CLI Usage"
+  short_description: "Run and validate production PTV CLI workflows"
+  default_prompt: "Use $ptv-cli-usage to exercise the requested PTV CLI workflow and report exact, secret-safe evidence."
