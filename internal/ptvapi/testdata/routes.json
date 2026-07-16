@@ -1,0 +1,22 @@
+{
+  "routes": [
+    {
+      "route_type": 0,
+      "route_id": 1,
+      "route_name": "Alamein",
+      "route_number": "",
+      "route_gtfs_id": "1-ALM"
+    },
+    {
+      "route_type": 2,
+      "route_id": 903,
+      "route_name": "Altona - Mordialloc",
+      "route_number": "903",
+      "route_gtfs_id": "4-903"
+    }
+  ],
+  "status": {
+    "version": "3.0",
+    "health": 1
+  }
+}

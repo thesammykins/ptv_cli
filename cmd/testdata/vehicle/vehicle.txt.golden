@@ -1,0 +1,31 @@
+Vehicle 931M-932M
+Mode: Train
+Matched by: vehicle_descriptor.id
+Route: Werribee Line
+Towards: Werribee
+Run ref: ptv-run-77
+Service state: current
+Status: scheduled
+Operator: Metro Trains Melbourne
+Vehicle: 6 Car Xtrapolis
+Position: -37.810000, 144.960000
+Position time: 2026-07-16 21:59:30
+Source: ptv vehicle_position
+GTFS Realtime
+  Source: Metro Train vehicle positions
+  Public label: 931M-932M
+  Feed entity ID: feed-entity-7
+  Licence plate: PUBLIC-PLATE
+  Static GTFS trip ID: static-trip-9
+  GTFS route ID: 2-WER
+  Current stop ID: stop-1
+  Status: IN_TRANSIT_TO
+  Observation state: current
+  Observed at: 2026-07-16 21:59:40
+  Observation age: 20s
+  Feed state: current
+  Feed observed at: 2026-07-16 21:59:50
+  Feed age: 10s
+  Position: -37.818176, 144.966782
+  Bearing: 94
+  Speed: 13.5 m/s

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -67,8 +68,8 @@ func TestVersionJSON(t *testing.T) {
 }
 
 func TestGTFSStatusJSONNotIngested(t *testing.T) {
-	t.Setenv("PTV_API_KEY", "test-key")
-	t.Setenv("PTV_API_USERID", "123")
+	t.Setenv("PTV_API_KEY", "")
+	t.Setenv("PTV_API_USERID", "")
 	t.Setenv("PTV_DATA_DIR", t.TempDir())
 
 	stdout, stderr, err := executeCommand(t, "--json", "gtfs", "status", "--no-update-check")
@@ -81,7 +82,10 @@ func TestGTFSStatusJSONNotIngested(t *testing.T) {
 
 	var got struct {
 		Database string `json:"database"`
+		DataDir  string `json:"data_dir"`
 		Ingested bool   `json:"ingested"`
+		State    string `json:"state"`
+		Action   string `json:"action"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
 		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
@@ -89,8 +93,39 @@ func TestGTFSStatusJSONNotIngested(t *testing.T) {
 	if got.Ingested {
 		t.Fatalf("ingested = true, want false")
 	}
-	if !strings.HasSuffix(got.Database, "gtfs.sqlite") {
-		t.Fatalf("database = %q, want gtfs.sqlite path", got.Database)
+	if got.Database == "" || got.DataDir == "" || got.State != "missing" || !strings.Contains(got.Action, "gtfs update") {
+		t.Fatalf("status = %+v, want actionable missing state", got)
+	}
+}
+
+func TestGTFSStatusJSONDistinguishesLegacyDatabase(t *testing.T) {
+	t.Setenv("PTV_API_KEY", "")
+	t.Setenv("PTV_API_USERID", "")
+	dataDir := t.TempDir()
+	t.Setenv("PTV_DATA_DIR", dataDir)
+	legacyPath := filepath.Join(dataDir, "gtfs.sqlite")
+	if err := os.WriteFile(legacyPath, []byte("legacy fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, err := executeCommand(t, "--json", "gtfs", "status", "--no-update-check")
+	if err != nil {
+		t.Fatalf("gtfs status --json: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var got struct {
+		Database string `json:"database"`
+		State    string `json:"state"`
+		Action   string `json:"action"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if got.Database != legacyPath || got.State != "legacy_reingest_required" ||
+		!strings.Contains(got.Action, "gtfs update") {
+		t.Fatalf("legacy status = %+v", got)
 	}
 }
 
@@ -153,14 +188,19 @@ func TestGTFSRealtimeCatalogDoesNotRequireTimetableCredentials(t *testing.T) {
 	}
 }
 
-func TestAuthStatusPropagatesInvalidConfig(t *testing.T) {
+func TestAuthStatusDoesNotLoadUnrelatedRuntimeConfig(t *testing.T) {
 	t.Setenv("PTV_BASE_URL", "http://example.com")
-	stdout, stderr, err := executeCommand(t, "auth", "status")
-	if err == nil {
-		t.Fatal("expected invalid config error")
+	t.Setenv("PTV_API_KEY", "test-key")
+	t.Setenv("PTV_API_USERID", "123")
+	stdout, stderr, err := executeCommand(t, "--json", "auth", "status")
+	if err != nil {
+		t.Fatalf("auth status loaded unrelated invalid runtime config: %v", err)
 	}
-	if stdout != "" || stderr != "" {
-		t.Fatalf("stdout=%q stderr=%q, want no direct output from Execute", stdout, stderr)
+	if stderr != "" {
+		t.Fatalf("stderr=%q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, `"configured": true`) {
+		t.Fatalf("stdout=%q, want configured credential status", stdout)
 	}
 }
 

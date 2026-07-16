@@ -24,7 +24,7 @@ terminal — exclusively for VIC PTV.
 - 🚉 Best-effort live vehicle lookup (`ptv vehicle`) from PTV vehicle
   descriptors/positions where the API exposes them, with optional Transport
   Victoria GTFS Realtime train, tram, bus and V/Line enrichment.
-- 🚋 Mode-scoped commands `ptv tram`, `ptv bus`, `ptv vline` for a full
+- 🚋 Mode-scoped commands `ptv train`, `ptv tram`, `ptv bus`, `ptv vline` for a full
   per-route view plus `lines` and `next` subcommands.
 - 🔐 Cross-platform secure credential storage in the OS keyring.
 - `--json` output on every command for scripting and AI agents.
@@ -65,8 +65,13 @@ Requires Go 1.25+. The journey planner uses a local SQLite database
 
 ## Credentials
 
-You need a PTV Timetable API **key** and **user/dev id**. Request them from PTV
-(see the [PTV API access page](https://www.ptv.vic.gov.au/footer/data-and-reporting/datasets/ptv-timetable-api/)).
+Networked Timetable API commands need a PTV Timetable API **key** and
+**user/dev id**. Request them from PTV (see the
+[PTV API access page](https://www.ptv.vic.gov.au/footer/data-and-reporting/datasets/ptv-timetable-api/)).
+Local static-data commands (`gtfs status`, `gtfs check`, and the core `plan`
+calculation) do not require Timetable credentials. `plan` uses them only for
+its optional disruption overlay; without credentials it still returns the
+local journey and reports that the overlay was skipped.
 
 Credentials are resolved in this order:
 
@@ -82,8 +87,9 @@ the PTV Timetable API. Create an account at
 <https://opendata.transport.vic.gov.au/>, subscribe to the public transport data,
 then set the Open Data subscription key as `PTV_OPENDATA_KEY_ID` in the
 environment or in an explicit `--env-file`; `PTV_OPENDATA_KEYID` is accepted as
-an alias. If the portal also gives you a data platform API token, set it as
-`PTV_OPENDATA_API_ID`. Without these Open Data credentials, the core PTV
+an alias. `PTV_OPENDATA_API_ID` remains readable for compatibility with older
+configuration, but the current feed contract does not document it and the CLI
+does not transmit it. Without the subscription key, the core PTV
 Timetable API features still work; commands that can use GTFS Realtime data will
 print a warning and skip that enrichment.
 
@@ -130,7 +136,8 @@ Current CLI wiring:
 
 ## Journey planning data (GTFS)
 
-Trip planning needs the PTV GTFS static feed ingested into a local database:
+Trip planning needs the PTV GTFS static feed ingested into a local database.
+No Timetable API credentials are needed for this lifecycle:
 
 ```sh
 ptv gtfs update     # downloads (~210 MB) and ingests into SQLite
@@ -139,25 +146,40 @@ ptv gtfs check      # asks the endpoint whether a newer feed is available
 ptv gtfs realtime   # list Transport Victoria GTFS Realtime feeds
 ```
 
-The feed is a zip-of-zips (one feed per mode). Stops and routes are namespaced
-`{feedMode}:{id}` to avoid cross-feed collisions, and proximity walk-transfers
-(≤250 m) are generated to connect stops across modes for multi-modal routing.
+The feed is a zip-of-zips (one feed per mode). Source identities are kept in
+their own feed namespace and compiled into generation-local integer keys for
+routing. Explicit station hierarchy, pathways, transfer restrictions,
+pickup/drop-off rules, and linked-trip continuations are retained. Conservative
+proximity transfers (≤250 m) connect otherwise unrelated stops only where no
+explicit rule makes that inference unsafe.
+
+An update is built in a private staging database and is published only after
+required files, source relationships, counts, coverage, indexes, and database
+integrity validate. Publication atomically changes a small manifest to select
+an immutable generation; a failed or interrupted update leaves the previous
+generation usable. Databases created by the earlier fixed-file layout require
+one `ptv gtfs update` re-ingest.
 
 ### Keeping the data fresh
 
 PTV publishes the GTFS feed roughly **weekly**, and each export only contains a
-**rolling ~30 days** of timetable data. If your local copy falls outside that
-window, the planner will simply find no services for the requested date — so it
-pays to stay current.
+bounded rolling timetable window. The CLI validates the requested service date
+against the generation's recorded coverage instead of silently treating an
+out-of-window query as an ordinary no-journey result.
 
-`ptv` helps in two ways:
+Freshness is reported as `current`, `changed`, `stale`, or `unknown` using the
+source URL, service coverage, publication/ingest evidence, and upstream
+validators:
 
-- **Staleness warning** — if the local data is older than **7 days** (override
-  with `PTV_GTFS_STALE_DAYS`), `ptv plan` prints a warning to stderr.
-- **Upstream update detection** — `ptv` records the feed's `ETag`/`Last-Modified`
-  on ingest and compares them against the endpoint with a cheap `HEAD` request,
-  **throttled to once per 24h**. `ptv plan` flags when a newer feed is available;
-  `ptv gtfs check` forces an immediate check.
+- **Stale** means service coverage excludes the relevant date or the best
+  available publication-time evidence exceeds the configured threshold
+  (`PTV_GTFS_STALE_DAYS`, seven days by default).
+- **Changed** means a successful upstream check returned a different comparable
+  `ETag` or `Last-Modified` validator.
+- **Unknown** is explicit when a check fails or comparable validators are
+  absent; missing evidence is never reported as current.
+- Successful automatic checks are throttled to once per 24 hours. Failed
+  automatic checks use persisted backoff; `ptv gtfs check --force` bypasses it.
 
 Both checks are **non-blocking** (they only warn) and run during `ptv plan`
 unless you pass `--no-update-check`. Warnings go to **stderr**, so `--json`
@@ -169,9 +191,10 @@ Transport Victoria Open Data also publishes GTFS Realtime protobuf feeds for
 trip updates, vehicle positions and service alerts. Live testing from this repo
 currently returns `401` for unauthenticated feed requests, so create an account
 at <https://opendata.transport.vic.gov.au/> and configure `PTV_OPENDATA_KEY_ID`
-before fetching. Some accounts also require `PTV_OPENDATA_API_ID`. Use
-`ptv gtfs realtime` to list the known feed catalog, or fetch one/all feeds when
-Open Data credentials are configured:
+before fetching. Use `ptv gtfs realtime` to list the known feed catalog, or
+fetch one/all feeds when
+the Open Data subscription key is configured. Each feed request sends exactly
+one documented `KeyID` header; the compatibility API-ID value is not sent:
 
 ```sh
 ptv gtfs realtime
@@ -194,6 +217,7 @@ ptv stops       Find stops near a location (stops near) or on a route (stops on)
 ptv station     Show facilities and platforms for a station/stop
 ptv next        How soon the next services depart a stop (real-time)
 ptv vehicle     Best available live information for a vehicle id or run_ref
+ptv train       Metro train route info, stops, departures and disruptions
 ptv tram        Tram route info, stops, departures and disruptions
 ptv bus         Bus route info, stops, departures and disruptions
 ptv vline       V/Line route info, stops, departures and disruptions
@@ -209,13 +233,15 @@ Global flags: `--json`, `--limit`.
 
 ### Mode-scoped commands
 
-`ptv tram`, `ptv bus` and `ptv vline` give an ergonomic, per-mode entry point:
+`ptv train`, `ptv tram`, `ptv bus` and `ptv vline` give an ergonomic, per-mode
+entry point:
 
 ```sh
-ptv tram 109                 # route header, directions, ordered stops + disruptions
+ptv tram 109                 # route header, directions, known stop order + disruptions
 ptv tram lines               # list every tram route
 ptv tram next "Melbourne University"   # live departures from a stop (tram only)
 
+ptv train 1
 ptv bus 246
 ptv vline 1745                # Geelong - Melbourne
 ```
@@ -267,11 +293,13 @@ What PTV currently exposes in live output:
   `Yarra Trams` and a numeric `vehicle_descriptor.id` such as `6059`; the
   description is often blank and route-filtered scans may not expose it.
 - GTFS Realtime: with `PTV_OPENDATA_KEY_ID`, `ptv vehicle` checks the official
-  train, tram, bus and V/Line vehicle-position feeds for matching `run_ref`/trip
-  ids, exact vehicle ids/labels, and consist components. It can return GTFS-R
-  position, occupancy and status directly when PTV descriptors are absent.
+  train, tram, bus and V/Line vehicle-position feeds for an exact public vehicle
+  label (including a train consist label). PTV `run_ref`, static `trip_id`, and
+  GTFS-R entity identifiers are never equated by matching strings. The private
+  upstream vehicle ID is not emitted. GTFS-R position, occupancy, timestamps,
+  and conservative freshness evidence remain visibly separate from PTV data.
 - V/Line: no Timetable API `vehicle_descriptor` data was observed in broad live
-  sampling, but GTFS-R vehicle positions expose live V/Line vehicle ids.
+  sampling, but GTFS-R vehicle positions can expose public V/Line labels.
 
 The Transport Victoria Open Data endpoint is useful beyond vehicle enrichment: it
 also publishes GTFS Realtime trip updates, service alerts and vehicle-position
@@ -314,6 +342,7 @@ ptv plan --arrive-by 09:00 -- "-37.8183,144.9671" "Camberwell"
 #   --arrive-by HH:MM | "..."             arrive no later than
 #   --date YYYY-MM-DD                     service date for HH:MM times
 #   --radius <metres>                     search radius for lat,lng / geocoded points
+#   --allow-conditional                   allow pickup/drop-off values requiring coordination
 #   --no-geocode                          match local stop names only (no address lookup)
 #   --no-disruptions                      skip the real-time disruption overlay
 #   --no-update-check                     skip the GTFS staleness / upstream-update check
@@ -344,8 +373,9 @@ internal/
   config/     credential resolution (env → keyring; explicit --env-file), paths
   credstore/  cross-platform OS keyring wrapper (go-keyring)
   geocode/    OpenStreetMap Nominatim client (VIC-biased, cached, throttled)
+  localtime/  embedded Australia/Melbourne service-day and display-time rules
   ptvapi/     HMAC-SHA1 signer, HTTP client, typed v3 responses, endpoints
-  gtfs/       downloader, zip-of-zips ingest, SQLite schema/queries, timetable
+  gtfs/       validated generation ingest, SQLite schema/queries, timetable
   router/     Connection Scan Algorithm (earliest-arrival + latest-departure)
   model/      shared domain types (Stop, Connection, Journey, Leg, ...)
   render/     table output helper
@@ -361,8 +391,12 @@ converted for display.
 
 ## JSON output for agents
 
-Every command accepts `--json`, emitting stable, structured output suitable for
-scripts and AI agents. Examples:
+Every command accepts `--json`, emitting normalized structured output suitable
+for scripts and AI agents. It is not a raw passthrough of upstream API models.
+Times and identifier namespaces are explicit, warnings remain valid structured
+fields where applicable, and diagnostic text goes to stderr so stdout is one
+JSON document. See [the JSON contract](docs/json-contract.md) for the shared
+rules and command shapes. Examples:
 
 ```sh
 ptv plan "Federation Square" "Box Hill" --json   # legs[], disruptions[], per-leg disrupted/disruption_ids
@@ -376,8 +410,11 @@ ptv version --json
 
 ## Releases
 
-Tagging a commit `vX.Y.Z` triggers the **Release** GitHub Action, which first
-runs `go build ./...`, `go vet ./...`, and `go test ./...`, then runs
+The root [`VERSION`](VERSION) file records the next reviewed release version.
+Source builds report that value with a `-dev` suffix. Tagging the merged commit
+with the matching `vX.Y.Z` triggers the **Release** GitHub Action, which first
+rejects a tag/version mismatch, runs `go build ./...`, `go vet ./...`, and
+`go test ./...`, then runs
 [GoReleaser](https://goreleaser.com/) to cross-compile `ptv` for
 linux/macOS/windows × amd64/arm64 (pure-Go, `CGO_ENABLED=0`) and attaches the
 archives + `checksums.txt` to a GitHub Release. The binary's `version`,
@@ -385,8 +422,9 @@ archives + `checksums.txt` to a GitHub Release. The binary's `version`,
 `ptv version`.
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0   # → builds and publishes the release
+version="$(tr -d '\r\n' < VERSION)"
+git tag "v$version"
+git push origin "v$version"   # → builds and publishes the release
 ```
 
 A lightweight **CI** workflow runs `go build`/`go vet`/`go test` on pushes to
@@ -394,15 +432,32 @@ A lightweight **CI** workflow runs `go build`/`go vet`/`go test` on pushes to
 
 ## Development
 
+The checked-in `mise.toml` pins the supported Go patch release and exposes the
+same local gates used by contributors. It does not load `.env`. After reviewing
+the file, trust it once per checkout:
+
 ```sh
+mise trust
+mise install
+mise run check
+# Extended race, timezone and CGO-disabled verification:
+mise run audit-check
+```
+
+Without `mise`, run the equivalent commands directly:
+
+```sh
+gofmt -l .  # must produce no output
 go build ./...
 go vet ./...
 go test ./...
 ```
 
-Tests cover the HMAC signer, the CSA planner (earliest-arrival,
-latest-departure and the no-journey case) on a fixture network, and GTFS id
-parsing.
+Tests cover official HTTP response shapes and request counts, identifier
+namespace collisions, GTFS compilation and service-day semantics, transfer
+precedence, forward and reverse CSA against an independent event-graph oracle,
+freshness/backoff, cancellation, local-time behavior, generation publication,
+and normalized JSON goldens.
 
 ## Notes
 

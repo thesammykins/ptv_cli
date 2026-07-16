@@ -206,6 +206,17 @@ func (c *Client) Run(ctx context.Context, runRef string, routeType int, opts Run
 	return &out, nil
 }
 
+// RunsByRef returns all runs associated with a PTV run_ref without probing
+// route types individually. The official endpoint returns a plural response.
+func (c *Client) RunsByRef(ctx context.Context, runRef RunRef, opts RunsOptions) (*RunsResponse, error) {
+	var out RunsResponse
+	path := fmt.Sprintf("/v3/runs/%s", url.PathEscape(string(runRef)))
+	if err := c.get(ctx, path, runsQuery(opts), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // RunsForRoute returns active runs for a route and route_type.
 func (c *Client) RunsForRoute(ctx context.Context, routeID, routeType int, opts RunsOptions) (*RunsResponse, error) {
 	var out RunsResponse

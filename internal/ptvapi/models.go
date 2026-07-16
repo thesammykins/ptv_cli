@@ -1,5 +1,9 @@
 package ptvapi
 
+// RunRef identifies a PTV Timetable API run. It is deliberately distinct from
+// static GTFS trip IDs and GTFS Realtime entity identifiers.
+type RunRef string
+
 // Status is the API status/metadata block returned with every response.
 type Status struct {
 	Version string `json:"version"`
@@ -55,10 +59,11 @@ type StopModel struct {
 
 // Direction is a direction of travel for a route.
 type Direction struct {
-	DirectionID   int    `json:"direction_id"`
-	DirectionName string `json:"direction_name"`
-	RouteID       int    `json:"route_id"`
-	RouteType     int    `json:"route_type"`
+	DirectionID               int    `json:"direction_id"`
+	DirectionName             string `json:"direction_name"`
+	RouteDirectionDescription string `json:"route_direction_description"`
+	RouteID                   int    `json:"route_id"`
+	RouteType                 int    `json:"route_type"`
 }
 
 // DirectionsResponse wraps the directions endpoints.
@@ -216,23 +221,114 @@ type StopsByDistanceResponse struct {
 	Status Status      `json:"status"`
 }
 
-// StopDetails carries facility/platform information for a stop.
+// StopGPS is the official nested coordinate representation returned by Stop
+// Details.
+type StopGPS struct {
+	Latitude  *float64 `json:"latitude"`
+	Longitude *float64 `json:"longitude"`
+}
+
+// StopLocation carries the location portion of Stop Details.
+type StopLocation struct {
+	GPS *StopGPS `json:"gps"`
+}
+
+// StopAmenityDetails carries facilities reported for a stop.
+type StopAmenityDetails struct {
+	Toilet     *bool   `json:"toilet"`
+	TaxiRank   *bool   `json:"taxi_rank"`
+	CarParking *string `json:"car_parking"`
+	CCTV       *bool   `json:"cctv"`
+}
+
+// StopAccessibilityWheelchair carries wheelchair-specific facilities. The
+// misspellings in two JSON keys are part of the upstream v3 contract.
+type StopAccessibilityWheelchair struct {
+	AccessibleRamp        *bool `json:"accessible_ramp"`
+	Parking               *bool `json:"parking"`
+	Telephone             *bool `json:"telephone"`
+	Toilet                *bool `json:"toilet"`
+	LowTicketCounter      *bool `json:"low_ticket_counter"`
+	Manouvering           *bool `json:"manouvering"`
+	RaisedPlatform        *bool `json:"raised_platform"`
+	Ramp                  *bool `json:"ramp"`
+	SecondaryPath         *bool `json:"secondary_path"`
+	RaisedPlatformShelter *bool `json:"raised_platform_shelther"`
+	SteepRamp             *bool `json:"steep_ramp"`
+}
+
+// StopAccessibility carries general and wheelchair accessibility facilities.
+type StopAccessibility struct {
+	Lighting                      *bool                        `json:"lighting"`
+	PlatformNumber                *int                         `json:"platform_number"`
+	AudioCustomerInformation      *bool                        `json:"audio_customer_information"`
+	Escalator                     *bool                        `json:"escalator"`
+	HearingLoop                   *bool                        `json:"hearing_loop"`
+	Lift                          *bool                        `json:"lift"`
+	Stairs                        *bool                        `json:"stairs"`
+	StopAccessible                *bool                        `json:"stop_accessible"`
+	TactileGroundSurfaceIndicator *bool                        `json:"tactile_ground_surface_indicator"`
+	WaitingRoom                   *bool                        `json:"waiting_room"`
+	Wheelchair                    *StopAccessibilityWheelchair `json:"wheelchair"`
+}
+
+// StopStaffing carries the staffing windows returned by PTV. WedPMTo retains
+// the upstream contract's capital T in wed_pm_To.
+type StopStaffing struct {
+	FriAMFrom        *string `json:"fri_am_from"`
+	FriAMTo          *string `json:"fri_am_to"`
+	FriPMFrom        *string `json:"fri_pm_from"`
+	FriPMTo          *string `json:"fri_pm_to"`
+	MonAMFrom        *string `json:"mon_am_from"`
+	MonAMTo          *string `json:"mon_am_to"`
+	MonPMFrom        *string `json:"mon_pm_from"`
+	MonPMTo          *string `json:"mon_pm_to"`
+	PHAdditionalText *string `json:"ph_additional_text"`
+	PHFrom           *string `json:"ph_from"`
+	PHTo             *string `json:"ph_to"`
+	SatAMFrom        *string `json:"sat_am_from"`
+	SatAMTo          *string `json:"sat_am_to"`
+	SatPMFrom        *string `json:"sat_pm_from"`
+	SatPMTo          *string `json:"sat_pm_to"`
+	SunAMFrom        *string `json:"sun_am_from"`
+	SunAMTo          *string `json:"sun_am_to"`
+	SunPMFrom        *string `json:"sun_pm_from"`
+	SunPMTo          *string `json:"sun_pm_to"`
+	ThuAMFrom        *string `json:"thu_am_from"`
+	ThuAMTo          *string `json:"thu_am_to"`
+	ThuPMFrom        *string `json:"thu_pm_from"`
+	ThuPMTo          *string `json:"thu_pm_to"`
+	TueAMFrom        *string `json:"tue_am_from"`
+	TueAMTo          *string `json:"tue_am_to"`
+	TuePMFrom        *string `json:"tue_pm_from"`
+	TuePMTo          *string `json:"tue_pm_to"`
+	WedAMFrom        *string `json:"wed_am_from"`
+	WedAMTo          *string `json:"wed_am_to"`
+	WedPMFrom        *string `json:"wed_pm_from"`
+	WedPMTo          *string `json:"wed_pm_To"`
+}
+
+// StopDetails carries the endpoint-specific official Stop Details response.
 type StopDetails struct {
-	StopID             int     `json:"stop_id"`
-	StopName           string  `json:"stop_name"`
-	StopType           string  `json:"stop_type"`
-	RouteType          int     `json:"route_type"`
-	StationType        string  `json:"station_type"`
-	StationDescription string  `json:"station_description"`
-	StopLatitude       float64 `json:"stop_latitude"`
-	StopLongitude      float64 `json:"stop_longitude"`
-	Routes             []Route `json:"routes"`
+	DisruptionIDs      []int64             `json:"disruption_ids"`
+	StationType        string              `json:"station_type"`
+	StationDescription string              `json:"station_description"`
+	RouteType          int                 `json:"route_type"`
+	StopLocation       *StopLocation       `json:"stop_location"`
+	StopAmenities      *StopAmenityDetails `json:"stop_amenities"`
+	StopAccessibility  *StopAccessibility  `json:"stop_accessibility"`
+	StopStaffing       *StopStaffing       `json:"stop_staffing"`
+	Routes             []Route             `json:"routes"`
+	StopID             int                 `json:"stop_id"`
+	StopName           string              `json:"stop_name"`
+	StopLandmark       *string             `json:"stop_landmark"`
 }
 
 // StopResponse wraps stops/{id}/route_type/{rt}.
 type StopResponse struct {
-	Stop   StopDetails `json:"stop"`
-	Status Status      `json:"status"`
+	Stop        StopDetails           `json:"stop"`
+	Disruptions map[string]Disruption `json:"disruptions"`
+	Status      Status                `json:"status"`
 }
 
 // ResultOutlet is a myki ticket outlet in search results.
@@ -281,7 +377,6 @@ type FareEstimateResponse struct {
 			FareDailyOffPeak float64 `json:"FareDailyOffPeak"`
 		} `json:"PassengerFares"`
 	} `json:"FareEstimateResult"`
-	Status Status `json:"status"`
 }
 
 // OutletResponse wraps the outlets endpoints.

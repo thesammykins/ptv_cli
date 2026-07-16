@@ -17,8 +17,21 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.25.12"
           cache: true
+
+      - name: Verify release tag matches reviewed version
+        shell: bash
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "VERSION must contain a stable X.Y.Z version; got '$version'" >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "release tag $GITHUB_REF_NAME does not match VERSION $version" >&2
+            exit 1
+          fi
 
       - name: Build
         run: go build ./...
@@ -40,7 +53,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.25.12"
           cache: true
 
       - name: Run GoReleaser

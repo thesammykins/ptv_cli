@@ -17,11 +17,25 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.25.12"
           cache: true
 
       - name: Build
         run: go build ./...
+
+      - name: Build and verify versioned release candidate
+        shell: bash
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          go build -trimpath \
+            -ldflags "-X main.version=$version -X main.commit=$GITHUB_SHA -X main.date=$built_at" \
+            -o "$RUNNER_TEMP/ptv" .
+          actual="$($RUNNER_TEMP/ptv version --json | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])')"
+          if [[ "$actual" != "$version" ]]; then
+            echo "candidate reports version $actual, want $version" >&2
+            exit 1
+          fi
 
       - name: Vet
         run: go vet ./...

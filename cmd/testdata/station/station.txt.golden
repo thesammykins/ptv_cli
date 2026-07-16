@@ -1,0 +1,54 @@
+Flinders Street Railway Station
+Stop ID: 1071   Mode: Train
+Type: Premium
+Staffed from first to last train
+Landmark: Flinders Street
+Location: -37.818175, 144.966776
+
+Amenities
+  Toilet: Yes
+  Taxi rank: No
+  Car parking: 12
+  CCTV: Yes
+
+Accessibility
+  Accessible stop: Yes
+  Platform: 1
+  Lighting: Yes
+  Audio customer information: Yes
+  Escalator: No
+  Hearing loop: Yes
+  Lift: Yes
+  Stairs: Yes
+  Tactile ground surface indicator: Yes
+  Waiting room: Yes
+  Wheelchair facilities
+    Accessible ramp: Yes
+    Parking: Yes
+    Telephone: No
+    Toilet: Yes
+    Low ticket counter: Yes
+    Manoeuvring space: Yes
+    Raised platform: Yes
+    Ramp: Yes
+    Secondary path: Yes
+    Raised platform shelter: Yes
+    Steep ramp: No
+
+Staffing
+  Monday AM: 05:00-12:00
+  Wednesday PM: 12:00-23:59
+  Public holiday note: Check public holiday timetable
+
+Disruptions
+  Platform change (Current, Planned works)
+    Description: Services depart from platform 2.
+    From: 2026-07-16T10:00:00+10:00
+    To: 2026-07-17T10:00:00+10:00
+    Published: 2026-07-15T10:00:00+10:00
+    Updated: 2026-07-15T11:00:00+10:00
+    URL: https://www.ptv.vic.gov.au/disruptions/101
+
+Routes serving this stop
+ID  NUMBER  NAME     MODE
+1           Alamein  Train

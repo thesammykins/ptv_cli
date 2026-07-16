@@ -11,19 +11,31 @@ const (
 	FeedKindServiceAlerts    FeedKind = "service_alerts"
 )
 
+// FeedAuthentication describes the documented request authentication for a
+// catalog feed. Header names are contract data, not retry candidates.
+type FeedAuthentication struct {
+	Header   string `json:"header"`
+	Required bool   `json:"required"`
+}
+
+// KeyIDHeader is the currently documented Transport Victoria Open Data
+// subscription header.
+const KeyIDHeader = "KeyID"
+
 // Feed describes a Transport Victoria GTFS Realtime feed endpoint.
 type Feed struct {
-	ID          string   `json:"id"`
-	Mode        string   `json:"mode"`
-	Kind        FeedKind `json:"kind"`
-	Title       string   `json:"title"`
-	URL         string   `json:"url"`
-	Description string   `json:"description,omitempty"`
+	ID             string             `json:"id"`
+	Mode           string             `json:"mode"`
+	Kind           FeedKind           `json:"kind"`
+	Title          string             `json:"title"`
+	URL            string             `json:"url"`
+	Authentication FeedAuthentication `json:"authentication"`
+	Description    string             `json:"description,omitempty"`
 }
 
 // Feeds returns the known Transport Victoria GTFS Realtime feed catalog.
 func Feeds() []Feed {
-	return []Feed{
+	feeds := []Feed{
 		{
 			ID:          "metro-trip-updates",
 			Mode:        "train",
@@ -105,6 +117,10 @@ func Feeds() []Feed {
 			Description: "Live location and occupancy information for V/Line train services.",
 		},
 	}
+	for i := range feeds {
+		feeds[i].Authentication = FeedAuthentication{Header: KeyIDHeader, Required: true}
+	}
+	return feeds
 }
 
 // FeedByID returns the known feed with id.

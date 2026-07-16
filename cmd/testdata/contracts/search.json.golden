@@ -1,0 +1,37 @@
+{
+  "stops": [
+    {
+      "stop_id": 10,
+      "ptv_stop_id": 10,
+      "stop_name": "Richmond Station",
+      "stop_suburb": "Richmond",
+      "route_type": 0,
+      "stop_latitude": -37.824,
+      "stop_longitude": 144.998
+    }
+  ],
+  "routes": [
+    {
+      "route_type": 0,
+      "route_id": 1,
+      "ptv_route_id": 1,
+      "route_name": "Alamein",
+      "route_number": "ALM",
+      "route_gtfs_id": "metro:ALM"
+    }
+  ],
+  "outlets": [
+    {
+      "outlet_name": "Shop",
+      "outlet_business": "Newsagent",
+      "outlet_latitude": -37.82,
+      "outlet_longitude": 145,
+      "outlet_suburb": "Richmond",
+      "outlet_distance": 120
+    }
+  ],
+  "status": {
+    "version": "3.0",
+    "health": 1
+  }
+}

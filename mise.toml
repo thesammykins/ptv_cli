@@ -1,0 +1,85 @@
+[tools]
+go = "1.25.12"
+
+[env]
+GOTOOLCHAIN = "local"
+
+[tasks.format]
+description = "Format all Go source files"
+run = '''
+git ls-files -z --cached --others --exclude-standard -- '*.go' | xargs -0 gofmt -w
+'''
+run_windows = '''
+powershell -NoProfile -Command "$files = git ls-files --cached --others --exclude-standard -- '*.go'; if ($files) { gofmt -w $files }"
+'''
+
+[tasks.format-check]
+description = "Fail when Go source is not formatted"
+run = '''
+files=$(git ls-files -z --cached --others --exclude-standard -- '*.go' | xargs -0 gofmt -l)
+if [ -n "$files" ]; then
+  echo "The following files need gofmt:"
+  printf '%s\n' "$files"
+  exit 1
+fi
+'''
+run_windows = '''
+powershell -NoProfile -Command "$tracked = git ls-files --cached --others --exclude-standard -- '*.go'; $files = gofmt -l $tracked; if ($files) { Write-Output 'The following files need gofmt:'; Write-Output $files; exit 1 }"
+'''
+
+[tasks.build]
+description = "Build all packages"
+run = "go build ./..."
+
+[tasks.vet]
+description = "Run Go static analysis"
+run = "go vet ./..."
+
+[tasks.test]
+description = "Run all unit tests"
+run = "go test ./..."
+
+[tasks.test-race]
+description = "Run the full race-enabled regression suite"
+run = "go test -race -count=1 ./..."
+
+[tasks.test-timezones]
+description = "Verify host-timezone-independent behavior"
+run = '''
+TZ=UTC go test ./...
+TZ=Australia/Perth go test ./...
+'''
+run_windows = '''
+powershell -NoProfile -Command "$env:TZ='UTC'; go test ./...; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:TZ='Australia/Perth'; go test ./..."
+'''
+
+[tasks.build-static]
+description = "Verify the pure-Go CGO-disabled build"
+run = "CGO_ENABLED=0 go build ./..."
+run_windows = '''
+powershell -NoProfile -Command "$env:CGO_ENABLED='0'; go build ./..."
+'''
+
+[tasks.build-windows]
+description = "Cross-compile all packages for Windows amd64"
+run = "GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./..."
+run_windows = "go build ./..."
+
+[tasks.check]
+description = "Run the local merge gates"
+run = [
+  { task = "format-check" },
+  { task = "build" },
+  { task = "vet" },
+  { task = "test" },
+]
+
+[tasks.audit-check]
+description = "Run the extended audit-remediation gates"
+run = [
+  { task = "check" },
+  { task = "test-race" },
+  { task = "test-timezones" },
+  { task = "build-static" },
+  { task = "build-windows" },
+]

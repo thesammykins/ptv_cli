@@ -34,7 +34,7 @@ cmd/                 cobra commands (one file per command/area)
   auth.go            credential capture/verify (OS keyring)
   plan.go            CSA journey planner (+ geocoding, disruptions, freshness)
   plan_disruptions.go disruption→journey matching
-  mode.go            ptv tram/bus/vline (per-mode route view + lines/next)
+  mode.go            ptv train/tram/bus/vline (per-mode route view + lines/next)
   next.go            real-time departures from a stop
   lines/stops/station/disruptions/fare/outlets/search.go  lookups
   gtfs.go            gtfs update/status/check (local dataset management)
@@ -44,9 +44,10 @@ internal/
   config/            credential resolution (env → keyring → .env), paths
   credstore/         cross-platform OS keyring wrapper (go-keyring)
   geocode/           OpenStreetMap Nominatim client (VIC-biased, cached)
+  localtime/         embedded Melbourne time/service-day rules
   ptvapi/            HMAC-SHA1 signer, HTTP client, typed v3 models, endpoints
   gtfsrt/            Transport Victoria Open Data GTFS Realtime protobuf client
-  gtfs/              downloader, zip-of-zips ingest, schema/queries, freshness
+  gtfs/              validated generations, zip-of-zips compiler, queries, freshness
   router/            Connection Scan Algorithm (earliest-arrival + arrive-by)
   model/             shared domain types (Stop, Connection, Journey, Leg, ...)
   render/            table output helper
@@ -67,8 +68,9 @@ internal/
   `HMAC-SHA1("{path}?{query-incl-devid}")`, uppercase hex, appended as
   `&signature=`. Optional Transport Victoria Open Data GTFS-R uses
   `PTV_OPENDATA_KEY_ID` (`PTV_OPENDATA_KEYID` alias accepted) for the
-  subscription key, optionally `PTV_OPENDATA_API_ID` for the data platform token,
-  and can be stored with `ptv auth opendata login`.
+  subscription key and can be stored with `ptv auth opendata login`.
+  `PTV_OPENDATA_API_ID` remains readable for compatibility but is not sent
+  without a current official contract requiring it.
 
 ## Gotchas (read before editing)
 
@@ -79,10 +81,10 @@ internal/
   1=V/Line Train, 2=Metro Train, 3=Tram, 4=Bus, 5=V/Line Coach, 6=Regional Bus
   (others=bus). `Leg.RouteType` carries this feed_mode; map to API route_type
   via `feedToAPIType` and to a label via `gtfsModeName`.
-- **`block_id` is now ingested** from the GTFS trips table (was previously absent).
-  A `block_id` groups consecutive trips of the same physical vehicle. The planner
-  carries block_id through to `model.Connection` and `model.Leg`, enabling run
-  continuation detection (e.g. "same train continues from X → Y").
+- **`block_id` is source context, not continuation proof.** Equal block strings
+  never connect feeds, service dates, or trips by themselves. Only a resolved
+  GTFS `transfers.txt` type-4 linked-trip rule permits a stay-onboard
+  continuation; type 5 prohibits it.
 - **`ptv train` mode command** exists (`route_type 0`), matching the pattern of
   `ptv tram`/`bus`/`vline`. It was previously missing from `$GOPATH/bin/ptv`
   builds due to a stale binary.
@@ -91,12 +93,12 @@ internal/
   names use it (e.g. "Bourke St/Spencer St").
 - **Negative latitudes need a `--` separator** on the CLI, because cobra treats
   a leading `-` as a flag (e.g. `ptv plan --arrive-by 09:00 -- "-37.81,144.96" "Camberwell"`).
-- **`plan` requires credentials** even though planning is local
-  (`config.Load()` errors without them). Disruption + freshness checks are
-  best-effort and must never block planning.
-- **GTFS data is a rolling ~30-day window**, published ~weekly. Past the window
-  the planner silently finds no services. Freshness checks (below) warn but do
-  **not** block.
+- **Core `plan` and static GTFS lifecycle do not require Timetable credentials.**
+  Disruption enrichment is optional and degrades with a stderr/JSON warning;
+  geocoding and freshness use their own runtime capabilities.
+- **GTFS data has bounded service-date coverage.** A query outside persisted
+  coverage returns an actionable coverage error rather than an ordinary
+  no-journey result. Upstream freshness checks remain advisory.
 - **Vehicle lookup is descriptor-driven, not a direct fleet API.** PTV exposes
   `vehicle_descriptor` and `vehicle_position` only when expanded on some
   departures/runs. There is no public direct "find vehicle by id" endpoint.
@@ -108,14 +110,17 @@ internal/
   numeric ids) but route-filtered scans may not expose them. Bus often exposes
   position without an identifying descriptor; V/Line descriptors were not
   observed in broad sampling. GTFS-R vehicle-position feeds can expose live
-  train/tram/bus/VLine vehicle ids and positions; train labels may be consist
-  strings and should match by component. Keep user messages explicit about
+  train/tram/bus/VLine public labels and positions; train labels may be consist
+  strings and are matched exactly. PTV descriptor matching may accept a consist
+  component. Never equate a PTV run reference with a static trip or feed-entity
+  ID, and never emit the GTFS-R private vehicle ID. Keep user messages explicit about
   `last_spotted` vs current service and about external fleet sources being
   existence/class references, not proof of live PTV visibility.
 - **Transport Victoria GTFS Realtime is separate from the Timetable API.** It is
-  protobuf, uses the Open Data subscription key as a `KeyId`/`KeyID` header plus
-  optional `PTV_OPENDATA_API_ID` bearer token, while some feeds prefer
-  `Ocp-Apim-Subscription-Key`. It has feeds for trip updates, service alerts and
+  protobuf and uses the Open Data subscription key as exactly one `KeyID`
+  header. Do not retry alternate spellings/headers or send the compatibility
+  `PTV_OPENDATA_API_ID` bearer value without newer official per-feed evidence.
+  It has feeds for trip updates, service alerts and
   vehicle positions across train/tram/bus/VLine. Live testing returned 401 for
   all unauthenticated feed requests. Use `ptv gtfs realtime` to list or inspect
   the feed catalog. `ptv vehicle` uses vehicle-position feeds for optional
@@ -126,20 +131,26 @@ internal/
 
 ## GTFS freshness
 
-`internal/gtfs/freshness.go` provides staleness + upstream-update detection:
+`internal/gtfs/freshness.go` provides staleness + upstream-update detection
+without mutating immutable generation databases:
 
-- Feed provenance (`ETag`/`Last-Modified`/size) is captured on `gtfs update`
-  and stored in the `meta` table.
-- `Freshness(ctx, store, url, allowNetwork, force)` returns a `FreshnessReport`
-  (age, `Stale` vs a 7-day threshold — override with `PTV_GTFS_STALE_DAYS`,
-  and `UpdateAvailable`). The live HEAD check is **throttled to once / 24h**
-  (cached in `meta`); `force` bypasses the throttle.
+- Source URL, validators, byte counts, publication/ingest times, and coverage
+  are persisted with the immutable generation's `DatasetState`; live-check
+  attempts/results are source-keyed in separate mutable state.
+- Reports classify data as `current`, `changed`, `stale`, or `unknown`.
+  Coverage/publication evidence wins over ingest age, and failed or
+  validator-less checks are never reported current.
+- Successful automatic checks are throttled for 24 hours; failures use
+  persisted backoff and an explicit forced check bypasses it.
 - `plan` prints warnings to stderr (suppress with `--no-update-check`);
-  `ptv gtfs status` shows the report; `ptv gtfs check` forces a live check.
+  `ptv gtfs status` shows the report; `ptv gtfs check --force` bypasses cached
+  success/failure timing.
 
 ## Releases
 
-Tagging `vX.Y.Z` triggers `.github/workflows/release.yml`, which runs
+The root `VERSION` file is the version reviewed in a release PR. Source builds
+show it with a `-dev` suffix. Tagging the merged commit with the matching
+`vX.Y.Z` triggers `.github/workflows/release.yml`, which rejects mismatches and runs
 GoReleaser (`.goreleaser.yaml`) to cross-compile for linux/macOS/windows ×
 amd64/arm64 (`CGO_ENABLED=0`) and publish archives + `checksums.txt`.
 `version`/`commit`/`date` are stamped via ldflags and shown by `ptv version`.
@@ -150,5 +161,6 @@ amd64/arm64 (`CGO_ENABLED=0`) and publish archives + `checksums.txt`.
 1. New file in `cmd/`; define a `*cobra.Command` with a clear `Use`/`Short`.
 2. Register it in that file's `init()` via `rootCmd.AddCommand` (or a parent).
 3. Support `--json` (use `printJSON`); human output via `render.NewTable`.
-4. Reuse `resolveRoute`/`resolveStop`/`loadClient`/`ctx` and the helpers.
+4. Reuse `resolveRoute`/`resolveStop`/`loadClient` and the helpers; propagate
+   `cmd.Context()` into all I/O, query, and routing work.
 5. Run `gofmt -w`, `go build/vet/test`, and live-test the binary.

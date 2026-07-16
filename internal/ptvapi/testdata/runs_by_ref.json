@@ -1,0 +1,24 @@
+{
+  "runs": [
+    {
+      "run_id": -1,
+      "run_ref": "run-123",
+      "route_id": 1,
+      "route_type": 0,
+      "final_stop_id": 1071,
+      "destination_name": "Flinders Street",
+      "status": "scheduled",
+      "direction_id": 1,
+      "run_sequence": 10,
+      "express_stop_count": 0,
+      "vehicle_position": null,
+      "vehicle_descriptor": null,
+      "geopath": [],
+      "run_note": ""
+    }
+  ],
+  "status": {
+    "version": "3.0",
+    "health": 1
+  }
+}

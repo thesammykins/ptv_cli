@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
@@ -47,6 +46,15 @@ func TestSortStopsBySequenceMovesZeroSequenceLast(t *testing.T) {
 	sortStopsBySequence(stops)
 	if stops[0].StopName != "one" || stops[1].StopName != "three" || stops[2].StopName != "zero" {
 		t.Fatalf("unexpected order: %#v", stops)
+	}
+}
+
+func TestStopSequenceLabelMarksUnsequencedStops(t *testing.T) {
+	if got := stopSequenceLabel(0); got != "-" {
+		t.Fatalf("stopSequenceLabel(0) = %q, want unsequenced marker", got)
+	}
+	if got := stopSequenceLabel(12); got != "12" {
+		t.Fatalf("stopSequenceLabel(12) = %q, want 12", got)
 	}
 }
 
@@ -123,17 +131,16 @@ func TestFareEstimateAllZeroDetectsUnavailableAPIData(t *testing.T) {
 	}
 }
 
-func TestCleanJSONStringsTrimsNestedAPIStrings(t *testing.T) {
-	resp := &ptvapi.SearchResult{
-		Stops:  []ptvapi.StopModel{{StopName: "Flinders Street ", StopSuburb: " Melbourne "}},
-		Routes: []ptvapi.Route{{RouteName: "North Coburg - Flinders Street Station ", RouteNumber: "19 "}},
+func TestFareEstimateResultErrorUsesEndpointStatus(t *testing.T) {
+	resp := &ptvapi.FareEstimateResponse{}
+	if err := fareEstimateResultError(resp); err != nil {
+		t.Fatalf("success status returned error: %v", err)
 	}
-	cleanJSONStrings(reflect.ValueOf(resp))
-	if resp.Stops[0].StopName != "Flinders Street" || resp.Stops[0].StopSuburb != "Melbourne" {
-		t.Fatalf("stop strings were not trimmed: %+v", resp.Stops[0])
-	}
-	if resp.Routes[0].RouteNumber != "19" || strings.HasSuffix(resp.Routes[0].RouteName, " ") {
-		t.Fatalf("route strings were not trimmed: %+v", resp.Routes[0])
+	resp.FareEstimateResultStatus.StatusCode = 12
+	resp.FareEstimateResultStatus.Message = " Fare unavailable\n"
+	err := fareEstimateResultError(resp)
+	if err == nil || !strings.Contains(err.Error(), "status 12): Fare unavailable") {
+		t.Fatalf("error = %v, want endpoint-specific status", err)
 	}
 }
 

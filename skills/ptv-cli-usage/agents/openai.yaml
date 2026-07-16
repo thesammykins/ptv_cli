@@ -1,3 +1,0 @@
-display_name: PTV CLI Usage
-short_description: Run and validate ptv_cli commands against live API and local GTFS data.
-default_prompt: Use the production ptv CLI from PATH to exercise the requested workflow, preferring human-friendly inputs and reporting exact commands and outcomes.

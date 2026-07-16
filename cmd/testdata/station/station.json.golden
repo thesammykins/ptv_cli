@@ -1,0 +1,115 @@
+{
+  "stop": {
+    "stop_id": 1071,
+    "ptv_stop_id": 1071,
+    "stop_name": "Flinders Street Railway Station",
+    "route_type": 0,
+    "station_type": "Premium",
+    "station_description": "Staffed from first to last train",
+    "stop_latitude": -37.818175,
+    "stop_longitude": 144.966776,
+    "stop_landmark": "Flinders Street",
+    "stop_location": {
+      "gps": {
+        "latitude": -37.818175,
+        "longitude": 144.966776
+      }
+    },
+    "stop_amenities": {
+      "toilet": true,
+      "taxi_rank": false,
+      "car_parking": "12",
+      "cctv": true
+    },
+    "stop_accessibility": {
+      "lighting": true,
+      "platform_number": 1,
+      "audio_customer_information": true,
+      "escalator": false,
+      "hearing_loop": true,
+      "lift": true,
+      "stairs": true,
+      "stop_accessible": true,
+      "tactile_ground_surface_indicator": true,
+      "waiting_room": true,
+      "wheelchair": {
+        "accessible_ramp": true,
+        "parking": true,
+        "telephone": false,
+        "toilet": true,
+        "low_ticket_counter": true,
+        "manoeuvring": true,
+        "raised_platform": true,
+        "ramp": true,
+        "secondary_path": true,
+        "raised_platform_shelter": true,
+        "steep_ramp": false
+      }
+    },
+    "stop_staffing": {
+      "monday_am_from": "05:00",
+      "monday_am_to": "12:00",
+      "wednesday_pm_from": "12:00",
+      "wednesday_pm_to": "23:59",
+      "public_holiday_additional_text": "Check public holiday timetable"
+    },
+    "routes": [
+      {
+        "route_type": 0,
+        "route_id": 1,
+        "ptv_route_id": 1,
+        "route_name": "Alamein",
+        "route_number": "",
+        "route_gtfs_id": "1-ALM"
+      }
+    ],
+    "disruption_ids": [
+      101
+    ],
+    "ptv_disruption_ids": [
+      101
+    ]
+  },
+  "disruptions": {
+    "101": {
+      "disruption_id": 101,
+      "ptv_disruption_id": 101,
+      "title": "Platform change",
+      "url": "https://www.ptv.vic.gov.au/disruptions/101",
+      "description": "Services depart from platform 2.",
+      "disruption_status": "Current",
+      "disruption_type": "Planned works",
+      "published_on": "2026-07-15T10:00:00+10:00",
+      "last_updated": "2026-07-15T11:00:00+10:00",
+      "from_date": "2026-07-16T10:00:00+10:00",
+      "to_date": "2026-07-17T10:00:00+10:00",
+      "routes": [
+        {
+          "route_type": 0,
+          "route_id": 1,
+          "ptv_route_id": 1,
+          "route_name": "Alamein",
+          "route_number": "",
+          "direction": {
+            "direction_id": 1,
+            "ptv_direction_id": 1,
+            "direction_name": "City"
+          }
+        }
+      ],
+      "stops": [
+        {
+          "route_type": 0,
+          "stop_id": 1071,
+          "ptv_stop_id": 1071,
+          "stop_name": "Flinders Street Railway Station"
+        }
+      ]
+    }
+  },
+  "status": {
+    "version": "3.0",
+    "health": 1
+  },
+  "time_zone": "Australia/Melbourne"
+}

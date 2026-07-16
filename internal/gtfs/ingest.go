@@ -2,173 +2,337 @@ package gtfs
 
 import (
 	"archive/zip"
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// walk transfer generation parameters.
-const (
-	maxTransferMeters = 250.0 // connect stops within this distance
-	walkMetersPerSec  = 1.3   // ~4.7 km/h
-	gridDegrees       = 0.0025
-)
-
 const (
 	maxOuterZipEntries = 100
-	maxInnerZipEntries = 32
+	maxInnerZipEntries = 64
 	maxInnerZipBytes   = int64(256 << 20)
 	maxCSVEntryBytes   = int64(2 << 30)
+	maxGTFSSeconds     = 72 * 60 * 60
+	maxTransferMeters  = 250.0
+	walkMetersPerSec   = 1.3
 )
 
-// Ingest parses the GTFS zip-of-zips at zipPath into the store. Existing data
-// is cleared inside the ingest transaction.
+var supportedFeedModes = map[int]string{
+	1:  "Regional Train",
+	2:  "Metropolitan Train",
+	3:  "Metropolitan Tram",
+	4:  "myki Bus",
+	5:  "Regional Coach",
+	6:  "Regional Bus",
+	10: "Interstate Train",
+	11: "SkyBus",
+}
+
+// IngestGenerationOptions supplies the identity and upstream evidence that
+// must be recorded before a staging store can be published by GenerationManager.
+type IngestGenerationOptions struct {
+	GenerationID string
+	Provenance   FeedProvenance
+	IngestedAt   time.Time
+	Progress     func(string)
+}
+
+// IngestGeneration compiles a Transport Victoria zip-of-zips into an empty
+// schema-v2 staging store and records exact checked counts and coverage. A0's
+// Publish performs the final resolved-identity and integrity validation.
+func IngestGeneration(ctx context.Context, store *Store, zipPath string, options IngestGenerationOptions) (DatasetState, error) {
+	if options.GenerationID == "" {
+		return DatasetState{}, errors.New("GTFS generation id is empty")
+	}
+	if options.Provenance.SourceURL == "" {
+		return DatasetState{}, errors.New("GTFS source URL is empty")
+	}
+	if options.IngestedAt.IsZero() {
+		options.IngestedAt = time.Now().UTC()
+	}
+	if options.Provenance.PublicationTime.IsZero() && options.Provenance.LastModified != "" {
+		if published, err := http.ParseTime(options.Provenance.LastModified); err == nil {
+			options.Provenance.PublicationTime = published.UTC()
+		}
+	}
+	coverage, err := compileArchive(ctx, store, zipPath, options.Progress)
+	if err != nil {
+		return DatasetState{}, err
+	}
+	counts, err := store.ComputeDatasetCounts(ctx)
+	if err != nil {
+		return DatasetState{}, err
+	}
+	state := DatasetState{
+		GenerationID: options.GenerationID,
+		Provenance:   options.Provenance,
+		IngestedAt:   options.IngestedAt.UTC(),
+		Coverage:     coverage,
+		Counts:       counts,
+	}
+	if err := store.SaveDatasetState(ctx, state); err != nil {
+		return DatasetState{}, err
+	}
+	return state, nil
+}
+
+// Ingest preserves the legacy API for callers not yet using immutable
+// generations. It compiles the same checked schema but records only the legacy
+// ingest marker; a compatibility import is deliberately not publishable.
 func Ingest(ctx context.Context, store *Store, zipPath string, progress func(string)) error {
+	if _, err := compileArchive(ctx, store, zipPath, progress); err != nil {
+		return err
+	}
+	if _, err := store.db.ExecContext(ctx, indexes); err != nil {
+		return fmt.Errorf("creating GTFS indexes: %w", err)
+	}
+	return nil
+}
+
+type outerFeed struct {
+	entry *zip.File
+	mode  int
+	name  string
+}
+
+type feedCompileStats struct {
+	stops       int64
+	routes      int64
+	services    int64
+	trips       int64
+	stopTimes   int64
+	connections int64
+}
+
+func compileArchive(ctx context.Context, store *Store, zipPath string, progress func(string)) (ServiceCoverage, error) {
+	if store == nil || store.db == nil {
+		return ServiceCoverage{}, errors.New("GTFS store is nil")
+	}
+	if store.readOnly {
+		return ServiceCoverage{}, errors.New("cannot ingest into a read-only GTFS generation")
+	}
 	if progress == nil {
 		progress = func(string) {}
 	}
-
-	zr, err := zip.OpenReader(zipPath)
+	outer, err := zip.OpenReader(zipPath)
 	if err != nil {
-		return fmt.Errorf("opening GTFS archive: %w", err)
+		return ServiceCoverage{}, fmt.Errorf("opening GTFS archive: %w", err)
 	}
-	defer zr.Close()
-	if len(zr.File) > maxOuterZipEntries {
-		return fmt.Errorf("GTFS archive has too many entries: %d exceeds %d", len(zr.File), maxOuterZipEntries)
+	defer outer.Close()
+	if len(outer.File) == 0 {
+		return ServiceCoverage{}, errors.New("GTFS archive is empty")
+	}
+	if len(outer.File) > maxOuterZipEntries {
+		return ServiceCoverage{}, fmt.Errorf("GTFS archive has too many entries: %d exceeds %d", len(outer.File), maxOuterZipEntries)
+	}
+	feeds, err := discoverOuterFeeds(outer.File)
+	if err != nil {
+		return ServiceCoverage{}, err
+	}
+	if len(feeds) == 0 {
+		return ServiceCoverage{}, errors.New("GTFS archive contains no recognized Transport Victoria feeds")
+	}
+	sort.Slice(feeds, func(i, j int) bool { return feeds[i].mode < feeds[j].mode })
+
+	tempDir, err := os.MkdirTemp(filepath.Dir(store.Path()), ".gtfs-inner-*")
+	if err != nil {
+		return ServiceCoverage{}, fmt.Errorf("creating private GTFS spool directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+	if err := os.Chmod(tempDir, 0o700); err != nil {
+		return ServiceCoverage{}, fmt.Errorf("securing private GTFS spool directory: %w", err)
 	}
 
-	tx, err := store.db.Begin()
+	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return ServiceCoverage{}, fmt.Errorf("beginning GTFS compilation: %w", err)
 	}
 	defer tx.Rollback()
-	if err := clearTx(tx); err != nil {
-		return err
+	if err := clearTx(ctx, tx); err != nil {
+		return ServiceCoverage{}, err
 	}
-
-	for _, f := range zr.File {
-		if !strings.HasSuffix(strings.ToLower(f.Name), "google_transit.zip") {
-			continue
+	for _, feed := range feeds {
+		if err := ctx.Err(); err != nil {
+			return ServiceCoverage{}, err
 		}
-		feedMode := feedModeFromName(f.Name)
-		progress(fmt.Sprintf("ingesting feed %s", f.Name))
-		if err := ingestInnerZip(ctx, tx, f, feedMode); err != nil {
-			return fmt.Errorf("feed %s: %w", f.Name, err)
+		progress(fmt.Sprintf("ingesting feed %s", feed.name))
+		path, err := spoolInnerArchive(ctx, feed.entry, tempDir)
+		if err != nil {
+			return ServiceCoverage{}, fmt.Errorf("feed %s: %w", feed.name, err)
+		}
+		stats, compileErr := compileInnerArchive(ctx, tx, path, feed)
+		_ = os.Remove(path)
+		if compileErr != nil {
+			return ServiceCoverage{}, fmt.Errorf("feed %s: %w", feed.name, compileErr)
+		}
+		if stats.stops == 0 || stats.routes == 0 || stats.services == 0 || stats.trips == 0 || stats.stopTimes == 0 || stats.connections == 0 {
+			return ServiceCoverage{}, fmt.Errorf("feed %s has zero core rows: %+v", feed.name, stats)
 		}
 	}
-
-	progress("generating walking transfers")
-	if err := generateFootTransfers(tx); err != nil {
-		return fmt.Errorf("generating transfers: %w", err)
+	progress("materializing transfer and walking graph")
+	if err := materializeTripLinks(ctx, tx); err != nil {
+		return ServiceCoverage{}, err
 	}
-
-	if err := store.setMeta(tx, "ingested_at", time.Now().UTC().Format(time.RFC3339)); err != nil {
-		return err
+	if err := generateProximityTransfers(ctx, tx); err != nil {
+		return ServiceCoverage{}, fmt.Errorf("generating proximity transfers: %w", err)
+	}
+	coverage, err := coverageTx(ctx, tx)
+	if err != nil {
+		return ServiceCoverage{}, err
+	}
+	if err := setMetaTx(ctx, tx, "ingested_at", time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return ServiceCoverage{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return err
+		return ServiceCoverage{}, fmt.Errorf("committing GTFS compilation: %w", err)
 	}
-
-	progress("building indexes")
-	if _, err := store.db.Exec(indexes); err != nil {
-		return fmt.Errorf("creating indexes: %w", err)
-	}
-	return nil
+	return coverage, nil
 }
 
-// feedModeFromName extracts the leading feed number from a path like
-// "2/google_transit.zip".
-func feedModeFromName(name string) int {
-	name = strings.ReplaceAll(name, "\\", "/")
-	parts := strings.Split(name, "/")
-	if len(parts) >= 2 {
-		if n, err := strconv.Atoi(parts[0]); err == nil {
-			return n
-		}
-	}
-	return 0
-}
-
-// prefix namespaces an id by feed mode to avoid cross-feed collisions.
-func prefix(feedMode int, id string) string {
-	return strconv.Itoa(feedMode) + ":" + id
-}
-
-func ingestInnerZip(ctx context.Context, tx *sql.Tx, f *zip.File, feedMode int) error {
-	if f.UncompressedSize64 > uint64(maxInnerZipBytes) {
-		return fmt.Errorf("inner GTFS zip too large: %d bytes exceeds %d", f.UncompressedSize64, maxInnerZipBytes)
-	}
-	rc, err := f.Open()
-	if err != nil {
-		return err
-	}
-	data, err := io.ReadAll(io.LimitReader(rc, maxInnerZipBytes+1))
-	rc.Close()
-	if err != nil {
-		return err
-	}
-	if int64(len(data)) > maxInnerZipBytes {
-		return fmt.Errorf("inner GTFS zip too large: exceeded %d bytes", maxInnerZipBytes)
-	}
-	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return err
-	}
-	if len(zr.File) > maxInnerZipEntries {
-		return fmt.Errorf("inner GTFS zip has too many entries: %d exceeds %d", len(zr.File), maxInnerZipEntries)
-	}
-
-	for _, inner := range zr.File {
-		base := strings.ToLower(inner.Name)
-		var handler func(context.Context, *sql.Tx, *csv.Reader, int) error
-		switch base {
-		case "stops.txt":
-			handler = ingestStops
-		case "routes.txt":
-			handler = ingestRoutes
-		case "trips.txt":
-			handler = ingestTrips
-		case "stop_times.txt":
-			handler = ingestStopTimes
-		case "calendar.txt":
-			handler = ingestCalendar
-		case "calendar_dates.txt":
-			handler = ingestCalendarDates
-		case "transfers.txt":
-			handler = ingestTransfers
-		default:
+func discoverOuterFeeds(entries []*zip.File) ([]outerFeed, error) {
+	seen := make(map[int]bool)
+	var feeds []outerFeed
+	for _, entry := range entries {
+		name := strings.ReplaceAll(entry.Name, "\\", "/")
+		if !strings.EqualFold(filepath.Base(name), "google_transit.zip") {
 			continue
 		}
-		if err := withCSV(inner, func(r *csv.Reader) error {
-			return handler(ctx, tx, r, feedMode)
-		}); err != nil {
-			return fmt.Errorf("%s: %w", base, err)
+		mode := feedModeFromName(name)
+		label, supported := supportedFeedModes[mode]
+		if !supported {
+			continue
 		}
+		if seen[mode] {
+			return nil, fmt.Errorf("GTFS archive contains duplicate feed mode %d", mode)
+		}
+		seen[mode] = true
+		feeds = append(feeds, outerFeed{entry: entry, mode: mode, name: label})
 	}
-	return nil
+	return feeds, nil
 }
 
-// withCSV opens a zip entry and invokes fn with a configured CSV reader.
-func withCSV(f *zip.File, fn func(*csv.Reader) error) error {
-	if f.UncompressedSize64 > uint64(maxCSVEntryBytes) {
-		return fmt.Errorf("CSV entry too large: %d bytes exceeds %d", f.UncompressedSize64, maxCSVEntryBytes)
+func spoolInnerArchive(ctx context.Context, entry *zip.File, dir string) (path string, err error) {
+	if entry.UncompressedSize64 > uint64(maxInnerZipBytes) {
+		return "", fmt.Errorf("inner GTFS zip too large: %d bytes exceeds %d", entry.UncompressedSize64, maxInnerZipBytes)
 	}
-	rc, err := f.Open()
+	source, err := entry.Open()
+	if err != nil {
+		return "", fmt.Errorf("opening inner GTFS zip: %w", err)
+	}
+	defer source.Close()
+	temp, err := os.CreateTemp(dir, ".feed-*.zip")
+	if err != nil {
+		return "", fmt.Errorf("creating inner GTFS spool: %w", err)
+	}
+	path = temp.Name()
+	remove := true
+	defer func() {
+		if remove {
+			_ = os.Remove(path)
+		}
+	}()
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return "", err
+	}
+	n, copyErr := copyContextLimit(ctx, temp, source, maxInnerZipBytes)
+	if copyErr != nil {
+		temp.Close()
+		return "", copyErr
+	}
+	if entry.UncompressedSize64 != 0 && n != int64(entry.UncompressedSize64) {
+		temp.Close()
+		return "", fmt.Errorf("inner GTFS zip length mismatch: received %d, expected %d", n, entry.UncompressedSize64)
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return "", fmt.Errorf("syncing inner GTFS spool: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return "", fmt.Errorf("closing inner GTFS spool: %w", err)
+	}
+	remove = false
+	return path, nil
+}
+
+func copyContextLimit(ctx context.Context, dst io.Writer, src io.Reader, limit int64) (int64, error) {
+	buffer := make([]byte, 128<<10)
+	var total int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		remaining := limit + 1 - total
+		if remaining <= 0 {
+			return total, fmt.Errorf("inner GTFS zip too large: exceeded %d bytes", limit)
+		}
+		chunk := buffer
+		if int64(len(chunk)) > remaining {
+			chunk = chunk[:remaining]
+		}
+		n, readErr := src.Read(chunk)
+		if n > 0 {
+			written, writeErr := dst.Write(chunk[:n])
+			total += int64(written)
+			if writeErr != nil {
+				return total, fmt.Errorf("writing inner GTFS spool: %w", writeErr)
+			}
+			if written != n {
+				return total, io.ErrShortWrite
+			}
+			if total > limit {
+				return total, fmt.Errorf("inner GTFS zip too large: exceeded %d bytes", limit)
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return total, nil
+			}
+			return total, fmt.Errorf("reading inner GTFS zip: %w", readErr)
+		}
+	}
+}
+
+// feedModeFromName extracts a supported branch number from paths such as
+// "2/google_transit.zip".
+func feedModeFromName(name string) int {
+	parts := strings.Split(strings.ReplaceAll(name, "\\", "/"), "/")
+	if len(parts) < 2 {
+		return 0
+	}
+	mode, err := strconv.Atoi(parts[len(parts)-2])
+	if err != nil {
+		return 0
+	}
+	return mode
+}
+
+func prefix(feedMode int, id string) string { return strconv.Itoa(feedMode) + ":" + id }
+
+func withCSV(file *zip.File, fn func(*csv.Reader) error) error {
+	if file.UncompressedSize64 > uint64(maxCSVEntryBytes) {
+		return fmt.Errorf("CSV entry too large: %d bytes exceeds %d", file.UncompressedSize64, maxCSVEntryBytes)
+	}
+	raw, err := file.Open()
 	if err != nil {
 		return err
 	}
-	defer rc.Close()
-	r := csv.NewReader(&byteLimitReader{r: rc, limit: maxCSVEntryBytes})
-	r.ReuseRecord = true
-	r.FieldsPerRecord = -1
-	return fn(r)
+	defer raw.Close()
+	reader := csv.NewReader(&byteLimitReader{r: raw, limit: maxCSVEntryBytes})
+	reader.ReuseRecord = true
+	reader.FieldsPerRecord = -1
+	return fn(reader)
 }
 
 type byteLimitReader struct {
@@ -195,451 +359,121 @@ func (r *byteLimitReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// headerIndex reads the header row and returns a name→index map.
-func headerIndex(r *csv.Reader) (map[string]int, error) {
-	row, err := r.Read()
+func headerIndex(reader *csv.Reader, required ...string) (map[string]int, error) {
+	row, err := reader.Read()
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, errors.New("CSV is empty")
+		}
 		return nil, err
 	}
-	idx := make(map[string]int, len(row))
+	index := make(map[string]int, len(row))
 	for i, name := range row {
-		idx[strings.TrimSpace(strings.TrimPrefix(name, "\ufeff"))] = i
+		name = strings.TrimSpace(strings.TrimPrefix(name, "\ufeff"))
+		if name == "" {
+			continue
+		}
+		if _, duplicate := index[name]; duplicate {
+			return nil, fmt.Errorf("duplicate CSV header %q", name)
+		}
+		index[name] = i
 	}
-	return idx, nil
+	for _, name := range required {
+		if _, ok := index[name]; !ok {
+			return nil, fmt.Errorf("missing required header %q", name)
+		}
+	}
+	return index, nil
 }
 
-// get safely returns the column value or "".
-func get(row []string, idx map[string]int, name string) string {
-	i, ok := idx[name]
+func get(row []string, index map[string]int, name string) string {
+	i, ok := index[name]
 	if !ok || i >= len(row) {
 		return ""
 	}
 	return strings.TrimSpace(row[i])
 }
 
-func ingestStops(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) error {
-	idx, err := headerIndex(r)
-	if err != nil {
-		return err
-	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO stops(stop_id,stop_name,stop_lat,stop_lon,parent_station) VALUES(?,?,?,?,?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		row, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		stopID := get(row, idx, "stop_id")
-		if stopID == "" {
-			return fmt.Errorf("missing stop_id")
-		}
-		lat, err := parseRequiredFloat(row, idx, "stop_lat")
-		if err != nil {
-			return fmt.Errorf("stop %s: %w", stopID, err)
-		}
-		lon, err := parseRequiredFloat(row, idx, "stop_lon")
-		if err != nil {
-			return fmt.Errorf("stop %s: %w", stopID, err)
-		}
-		parent := get(row, idx, "parent_station")
-		if parent != "" {
-			parent = prefix(feedMode, parent)
-		}
-		if _, err := stmt.Exec(prefix(feedMode, stopID), get(row, idx, "stop_name"), lat, lon, parent); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func ingestRoutes(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) error {
-	idx, err := headerIndex(r)
-	if err != nil {
-		return err
-	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO routes(route_id,route_short_name,route_long_name,route_type,feed_mode) VALUES(?,?,?,?,?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		row, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		routeID := get(row, idx, "route_id")
-		if routeID == "" {
-			return fmt.Errorf("missing route_id")
-		}
-		rtype, err := parseRequiredInt(row, idx, "route_type")
-		if err != nil {
-			return fmt.Errorf("route %s: %w", routeID, err)
-		}
-		if _, err := stmt.Exec(prefix(feedMode, routeID), get(row, idx, "route_short_name"), get(row, idx, "route_long_name"), rtype, feedMode); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func ingestTrips(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) error {
-	idx, err := headerIndex(r)
-	if err != nil {
-		return err
-	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO trips(trip_id,route_id,service_id,trip_headsign,direction_id,block_id) VALUES(?,?,?,?,?,?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		row, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		tripID := get(row, idx, "trip_id")
-		routeID := get(row, idx, "route_id")
-		serviceID := get(row, idx, "service_id")
-		if tripID == "" || routeID == "" || serviceID == "" {
-			return fmt.Errorf("trip row missing trip_id, route_id, or service_id")
-		}
-		dir, err := parseOptionalInt(row, idx, "direction_id", 0)
-		if err != nil {
-			return fmt.Errorf("trip %s: %w", tripID, err)
-		}
-		if _, err := stmt.Exec(prefix(feedMode, tripID), prefix(feedMode, routeID), prefix(feedMode, serviceID), get(row, idx, "trip_headsign"), dir, get(row, idx, "block_id")); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func ingestStopTimes(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) error {
-	idx, err := headerIndex(r)
-	if err != nil {
-		return err
-	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO stop_times(trip_id,stop_id,stop_sequence,arrival_sec,departure_sec) VALUES(?,?,?,?,?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		row, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		tripID := get(row, idx, "trip_id")
-		stopID := get(row, idx, "stop_id")
-		if tripID == "" || stopID == "" {
-			return fmt.Errorf("stop_times row missing trip_id or stop_id")
-		}
-		seq, err := parseRequiredInt(row, idx, "stop_sequence")
-		if err != nil {
-			return fmt.Errorf("trip %s stop %s: %w", tripID, stopID, err)
-		}
-		arr, ok := parseGTFSTime(get(row, idx, "arrival_time"))
-		if !ok {
-			return fmt.Errorf("trip %s stop %s: invalid arrival_time", tripID, stopID)
-		}
-		dep, ok := parseGTFSTime(get(row, idx, "departure_time"))
-		if !ok {
-			return fmt.Errorf("trip %s stop %s: invalid departure_time", tripID, stopID)
-		}
-		if _, err := stmt.Exec(prefix(feedMode, tripID), prefix(feedMode, stopID), seq, arr, dep); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func ingestCalendar(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) error {
-	idx, err := headerIndex(r)
-	if err != nil {
-		return err
-	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO calendar(service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date) VALUES(?,?,?,?,?,?,?,?,?,?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		row, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		serviceID := get(row, idx, "service_id")
-		if serviceID == "" {
-			return fmt.Errorf("missing service_id")
-		}
-		monday, err := parseRequiredInt(row, idx, "monday")
-		if err != nil {
-			return fmt.Errorf("service %s: %w", serviceID, err)
-		}
-		tuesday, err := parseRequiredInt(row, idx, "tuesday")
-		if err != nil {
-			return fmt.Errorf("service %s: %w", serviceID, err)
-		}
-		wednesday, err := parseRequiredInt(row, idx, "wednesday")
-		if err != nil {
-			return fmt.Errorf("service %s: %w", serviceID, err)
-		}
-		thursday, err := parseRequiredInt(row, idx, "thursday")
-		if err != nil {
-			return fmt.Errorf("service %s: %w", serviceID, err)
-		}
-		friday, err := parseRequiredInt(row, idx, "friday")
-		if err != nil {
-			return fmt.Errorf("service %s: %w", serviceID, err)
-		}
-		saturday, err := parseRequiredInt(row, idx, "saturday")
-		if err != nil {
-			return fmt.Errorf("service %s: %w", serviceID, err)
-		}
-		sunday, err := parseRequiredInt(row, idx, "sunday")
-		if err != nil {
-			return fmt.Errorf("service %s: %w", serviceID, err)
-		}
-		if _, err := stmt.Exec(
-			prefix(feedMode, serviceID),
-			monday, tuesday, wednesday,
-			thursday, friday, saturday,
-			sunday, get(row, idx, "start_date"), get(row, idx, "end_date")); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func ingestCalendarDates(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) error {
-	idx, err := headerIndex(r)
-	if err != nil {
-		return err
-	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO calendar_dates(service_id,date,exception_type) VALUES(?,?,?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		row, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		serviceID := get(row, idx, "service_id")
-		if serviceID == "" {
-			return fmt.Errorf("missing service_id")
-		}
-		ex, err := parseRequiredInt(row, idx, "exception_type")
-		if err != nil {
-			return fmt.Errorf("service %s: %w", serviceID, err)
-		}
-		if _, err := stmt.Exec(prefix(feedMode, serviceID), get(row, idx, "date"), ex); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func ingestTransfers(ctx context.Context, tx *sql.Tx, r *csv.Reader, feedMode int) error {
-	idx, err := headerIndex(r)
-	if err != nil {
-		return err
-	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO transfers(from_stop_id,to_stop_id,transfer_type,min_transfer_time) VALUES(?,?,?,?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		row, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		fromStopID := get(row, idx, "from_stop_id")
-		toStopID := get(row, idx, "to_stop_id")
-		if fromStopID == "" || toStopID == "" {
-			return fmt.Errorf("transfer row missing from_stop_id or to_stop_id")
-		}
-		ttype, err := parseRequiredInt(row, idx, "transfer_type")
-		if err != nil {
-			return fmt.Errorf("transfer %s to %s: %w", fromStopID, toStopID, err)
-		}
-		mt, err := parseOptionalInt(row, idx, "min_transfer_time", 0)
-		if err != nil {
-			return fmt.Errorf("transfer %s to %s: %w", fromStopID, toStopID, err)
-		}
-		if _, err := stmt.Exec(prefix(feedMode, fromStopID), prefix(feedMode, toStopID), ttype, mt); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// stopGeo is a stop's coordinates for transfer generation.
-type stopGeo struct {
-	id  string
-	lat float64
-	lon float64
-}
-
-// generateFootTransfers adds symmetric walking transfers between stops that
-// are within maxTransferMeters of each other (including across feeds), using a
-// spatial grid to keep it tractable.
-func generateFootTransfers(tx *sql.Tx) error {
-	rows, err := tx.Query(`SELECT stop_id, stop_lat, stop_lon FROM stops WHERE stop_lat != 0 AND stop_lon != 0`)
-	if err != nil {
-		return err
-	}
-	var stops []stopGeo
-	grid := map[[2]int][]int{}
-	for rows.Next() {
-		var s stopGeo
-		if err := rows.Scan(&s.id, &s.lat, &s.lon); err != nil {
-			rows.Close()
-			return err
-		}
-		i := len(stops)
-		stops = append(stops, s)
-		key := [2]int{int(math.Floor(s.lat / gridDegrees)), int(math.Floor(s.lon / gridDegrees))}
-		grid[key] = append(grid[key], i)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	stmt, err := tx.Prepare(`INSERT INTO transfers(from_stop_id,to_stop_id,transfer_type,min_transfer_time) VALUES(?,?,2,?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for i, s := range stops {
-		gi := int(math.Floor(s.lat / gridDegrees))
-		gj := int(math.Floor(s.lon / gridDegrees))
-		for di := -1; di <= 1; di++ {
-			for dj := -1; dj <= 1; dj++ {
-				for _, j := range grid[[2]int{gi + di, gj + dj}] {
-					if j <= i {
-						continue
-					}
-					o := stops[j]
-					d := haversine(s.lat, s.lon, o.lat, o.lon)
-					if d > maxTransferMeters {
-						continue
-					}
-					secs := int(d/walkMetersPerSec) + 1
-					if _, err := stmt.Exec(s.id, o.id, secs); err != nil {
-						return err
-					}
-					if _, err := stmt.Exec(o.id, s.id, secs); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// haversine returns the great-circle distance in metres.
-func haversine(lat1, lon1, lat2, lon2 float64) float64 {
-	const r = 6371000.0
-	p1 := lat1 * math.Pi / 180
-	p2 := lat2 * math.Pi / 180
-	dp := (lat2 - lat1) * math.Pi / 180
-	dl := (lon2 - lon1) * math.Pi / 180
-	a := math.Sin(dp/2)*math.Sin(dp/2) + math.Cos(p1)*math.Cos(p2)*math.Sin(dl/2)*math.Sin(dl/2)
-	return r * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-}
-
-func parseRequiredFloat(row []string, idx map[string]int, name string) (float64, error) {
-	v := get(row, idx, name)
-	if v == "" {
+func parseRequiredInt(row []string, index map[string]int, name string) (int, error) {
+	value := get(row, index, name)
+	if value == "" {
 		return 0, fmt.Errorf("missing %s", name)
 	}
-	n, err := strconv.ParseFloat(v, 64)
+	number, err := strconv.Atoi(value)
 	if err != nil {
 		return 0, fmt.Errorf("invalid %s: %w", name, err)
 	}
-	return n, nil
+	return number, nil
 }
 
-func parseRequiredInt(row []string, idx map[string]int, name string) (int, error) {
-	v := get(row, idx, name)
-	if v == "" {
-		return 0, fmt.Errorf("missing %s", name)
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return 0, fmt.Errorf("invalid %s: %w", name, err)
-	}
-	return n, nil
-}
-
-func parseOptionalInt(row []string, idx map[string]int, name string, fallback int) (int, error) {
-	v := get(row, idx, name)
-	if v == "" {
+func parseOptionalInt(row []string, index map[string]int, name string, fallback int) (int, error) {
+	value := get(row, index, name)
+	if value == "" {
 		return fallback, nil
 	}
-	n, err := strconv.Atoi(v)
+	number, err := strconv.Atoi(value)
 	if err != nil {
 		return 0, fmt.Errorf("invalid %s: %w", name, err)
 	}
-	return n, nil
+	return number, nil
 }
 
-func clearTx(tx *sql.Tx) error {
-	for _, t := range []string{"stops", "routes", "trips", "stop_times", "calendar", "calendar_dates", "transfers", "meta"} {
-		if _, err := tx.Exec("DELETE FROM " + t); err != nil {
-			return err
+func parseOptionalFloat(row []string, index map[string]int, name string) (sql.NullFloat64, error) {
+	value := get(row, index, name)
+	if value == "" {
+		return sql.NullFloat64{}, nil
+	}
+	number, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return sql.NullFloat64{}, fmt.Errorf("invalid %s: %w", name, err)
+	}
+	if math.IsNaN(number) || math.IsInf(number, 0) {
+		return sql.NullFloat64{}, fmt.Errorf("invalid %s %q", name, value)
+	}
+	return sql.NullFloat64{Float64: number, Valid: true}, nil
+}
+
+func parseGTFSDate(value string) (string, error) {
+	if _, err := time.Parse("20060102", value); err != nil {
+		return "", fmt.Errorf("invalid GTFS date %q: %w", value, err)
+	}
+	return value, nil
+}
+
+func clearTx(ctx context.Context, tx *sql.Tx) error {
+	for _, table := range []string{
+		"trip_links", "connections", "pathways", "levels", "transfers",
+		"stop_times", "trips", "calendar_dates", "calendar", "routes",
+		"stops", "feeds", "dataset_state", "meta",
+	} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+			return fmt.Errorf("clearing %s: %w", table, err)
 		}
 	}
 	return nil
+}
+
+func setMetaTx(ctx context.Context, tx *sql.Tx, key, value string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return err
+}
+
+func coverageTx(ctx context.Context, tx *sql.Tx) (ServiceCoverage, error) {
+	var start, end sql.NullString
+	err := tx.QueryRowContext(ctx, `
+		SELECT MIN(day), MAX(day) FROM (
+			SELECT start_date AS day FROM calendar
+			WHERE start_date != '' AND (monday+tuesday+wednesday+thursday+friday+saturday+sunday)>0
+			UNION ALL SELECT end_date FROM calendar
+			WHERE end_date != '' AND (monday+tuesday+wednesday+thursday+friday+saturday+sunday)>0
+			UNION ALL SELECT date FROM calendar_dates WHERE date != '' AND exception_type=1
+		)`).Scan(&start, &end)
+	if err != nil {
+		return ServiceCoverage{}, fmt.Errorf("computing GTFS coverage: %w", err)
+	}
+	if !start.Valid || !end.Valid {
+		return ServiceCoverage{}, errors.New("GTFS feed has no service coverage")
+	}
+	return ServiceCoverage{Start: start.String, End: end.String}, nil
 }

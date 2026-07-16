@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	gtfs "github.com/MobilityData/gtfs-realtime-bindings/golang/gtfs"
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/config"
 	"github.com/thesammykins/ptv_cli/internal/gtfsrt"
+	"github.com/thesammykins/ptv_cli/internal/localtime"
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 	"github.com/thesammykins/ptv_cli/internal/render"
 )
@@ -19,6 +22,12 @@ import (
 var vehicleScanRoutes int
 var vehicleStop string
 var vehicleRoute string
+
+const (
+	vehiclePTVLookupBudget    = 30 * time.Second
+	vehicleGTFSRealtimeBudget = 30 * time.Second
+	vehicleMaxRouteScan       = 100
+)
 
 var vehicleCmd = &cobra.Command{
 	Use:     "vehicle <vehicle-id|run-ref>",
@@ -31,11 +40,11 @@ PTV exposes a consist string such as "113M-114M-1357T-1422T-243M-244M";
 you can search either the full consist string or one component such as
 "243M". For trams, PTV may expose the tram number (for example "6059")
 from some departure contexts. Optional Transport Victoria GTFS Realtime can
-match train, tram, bus and V/Line vehicle ids/labels or enrich a PTV run_ref
+match public train, tram, bus and V/Line vehicle labels
 when Open Data credentials are configured with 'ptv auth opendata login' or
-PTV_OPENDATA_KEY_ID, with PTV_OPENDATA_API_ID when required by your Open Data
-account. If no vehicle descriptor matches, ptv falls back to trying the argument
-as a PTV run_ref across all route types.
+PTV_OPENDATA_KEY_ID. PTV run references and static GTFS trip/entity identifiers
+are kept separate. If no vehicle descriptor matches, ptv falls back to trying
+the argument as a PTV run_ref with the broad run endpoint.
 
 Recommended usage is to provide where the vehicle was seen:
 
@@ -57,40 +66,59 @@ Shortfalls and caveats:
     expose tram numbers, while route-filtered scans may not.
   * Bus and V/Line descriptors are often absent in the PTV Timetable API. With
     Transport Victoria GTFS Realtime credentials, train/tram/bus/VLine lookups
-    can also use official vehicle-position feeds for vehicle id, trip id,
+    can also use official vehicle-position feeds for public label, trip id,
     position, occupancy and status.
   * With --stop/--route, earlier departures can produce a "last_spotted"
     result. That means the vehicle appeared in prior PTV departure data for
     that stop/route but does not appear in upcoming departures there now.
-  * --scan-routes is an explicit slow fallback for active route-run scans; keep
-    it bounded unless you deliberately want broader network probing.`,
-	Args: cobra.ExactArgs(1),
+  * --scan-routes is an explicit slow fallback for active route-run scans and
+    accepts at most 100 routes.`,
+	Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+			return err
+		}
+		return validateVehicleRouteScan(vehicleScanRoutes)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, cfg, err := loadClient()
+		client, _, err := loadClient()
 		if err != nil {
 			return err
 		}
 
 		query := strings.TrimSpace(args[0])
-		result, err := lookupVehicleWithHints(ctx(), client, query, vehicleLookupHints{
+		result, err := lookupVehicleWithinBudget(cmd.Context(), client, query, vehicleLookupHints{
 			Stop:           vehicleStop,
 			Route:          vehicleRoute,
-			RouteScanLimit: orDefault(vehicleScanRoutes, 0),
-		})
+			RouteScanLimit: vehicleScanRoutes,
+		}, vehiclePTVLookupBudget)
 		if err != nil {
 			return err
 		}
-		if cfg.OpenDataKeyID != "" {
-			result = enrichWithGTFSRealtime(ctx(), gtfsrt.New(cfg.OpenDataKeyID, cfg.OpenDataAPIID), query, result)
+		openData, err := config.OpenDataCredentialsWithOptions(config.LoadOptions{EnvFile: flagEnv})
+		if err != nil {
+			return err
+		}
+		if openData.KeyID != "" {
+			enrichmentCtx, cancel := context.WithTimeout(cmd.Context(), vehicleGTFSRealtimeBudget)
+			result = enrichWithGTFSRealtime(enrichmentCtx, gtfsrt.New(openData.KeyID), query, result)
+			cancel()
 		} else if shouldMentionGTFSRealtimeBus(result) {
 			result.Warnings = append(result.Warnings, "GTFS Realtime enrichment skipped; run 'ptv auth opendata login' or set PTV_OPENDATA_KEY_ID to enable Transport Victoria Open Data vehicle positions")
 		}
-		if flagJSON {
-			return printJSON(result)
+		if err := cmd.Context().Err(); err != nil {
+			return err
 		}
-		printVehicleResult(result)
-		return nil
+		return printVehicleCommandResult(result)
 	},
+}
+
+func printVehicleCommandResult(result *vehicleResult) error {
+	if flagJSON {
+		printVehicleWarnings(result.Warnings)
+		return printJSON(result)
+	}
+	printVehicleResult(result)
+	return nil
 }
 
 type concreteVehicleClient interface {
@@ -100,13 +128,13 @@ type concreteVehicleClient interface {
 }
 
 type gtfsRealtimeVehicleClient interface {
-	FetchVehiclePositions(ctx context.Context, feedURL string) (*gtfs.FeedMessage, error)
+	FetchSnapshot(ctx context.Context, feed gtfsrt.Feed) (*gtfsrt.Snapshot, error)
 }
 
 type vehicleLookupClient interface {
 	Routes(ctx context.Context, routeTypes []int, name string) (*ptvapi.RouteResponse, error)
 	RunsForRoute(ctx context.Context, routeID, routeType int, opts ptvapi.RunsOptions) (*ptvapi.RunsResponse, error)
-	Run(ctx context.Context, runRef string, routeType int, opts ptvapi.RunsOptions) (*ptvapi.RunResponse, error)
+	RunsByRef(ctx context.Context, runRef ptvapi.RunRef, opts ptvapi.RunsOptions) (*ptvapi.RunsResponse, error)
 	Pattern(ctx context.Context, runRef string, routeType int, opts ptvapi.PatternOptions) (*ptvapi.StoppingPatternResponse, error)
 }
 
@@ -117,41 +145,57 @@ type vehicleLookupHints struct {
 }
 
 type vehicleResult struct {
-	Query          string                    `json:"query"`
-	MatchedBy      string                    `json:"matched_by"`
-	VehicleID      string                    `json:"vehicle_id,omitempty"`
-	RouteType      *int                      `json:"route_type,omitempty"`
-	Mode           string                    `json:"mode,omitempty"`
-	RouteID        int                       `json:"route_id,omitempty"`
-	Route          string                    `json:"route,omitempty"`
-	RunRef         string                    `json:"run_ref,omitempty"`
-	Destination    string                    `json:"destination,omitempty"`
-	Status         string                    `json:"status,omitempty"`
-	ServiceState   string                    `json:"service_state,omitempty"`
-	Position       *vehiclePositionResult    `json:"position,omitempty"`
-	Descriptor     *ptvapi.VehicleDescriptor `json:"vehicle_descriptor,omitempty"`
-	GTFSRealtime   *vehicleGTFSRealtime      `json:"gtfs_realtime,omitempty"`
-	NextStop       *vehicleStopResult        `json:"next_stop,omitempty"`
-	LastSeen       *vehicleStopResult        `json:"last_seen,omitempty"`
-	PositionSource string                    `json:"position_source,omitempty"`
-	Warnings       []string                  `json:"warnings,omitempty"`
+	Query       string `json:"query"`
+	MatchedBy   string `json:"matched_by"`
+	PublicLabel string `json:"public_label,omitempty"`
+	// VehicleID is retained for current-major compatibility and is populated
+	// only from PTV's public vehicle descriptor, never a GTFS-R internal ID.
+	VehicleID       string                   `json:"vehicle_id,omitempty"`
+	PTVDescriptorID string                   `json:"ptv_vehicle_descriptor_id,omitempty"`
+	RouteType       *int                     `json:"route_type,omitempty"`
+	PTVRouteType    *int                     `json:"ptv_route_type,omitempty"`
+	Mode            string                   `json:"mode,omitempty"`
+	RouteID         int                      `json:"route_id,omitempty"`
+	PTVRouteID      int                      `json:"ptv_route_id,omitempty"`
+	Route           string                   `json:"route,omitempty"`
+	RunRef          string                   `json:"run_ref,omitempty"`
+	PTVRunRef       string                   `json:"ptv_run_ref,omitempty"`
+	Destination     string                   `json:"destination,omitempty"`
+	Status          string                   `json:"status,omitempty"`
+	ServiceState    string                   `json:"service_state,omitempty"`
+	Position        *vehiclePositionResult   `json:"position,omitempty"`
+	Descriptor      *vehicleDescriptorResult `json:"vehicle_descriptor,omitempty"`
+	GTFSRealtime    *vehicleGTFSRealtime     `json:"gtfs_realtime,omitempty"`
+	NextStop        *vehicleStopResult       `json:"next_stop,omitempty"`
+	LastSeen        *vehicleStopResult       `json:"last_seen,omitempty"`
+	PositionSource  string                   `json:"position_source,omitempty"`
+	Warnings        []string                 `json:"warnings,omitempty"`
 }
 
 type vehicleGTFSRealtime struct {
-	Source          string                 `json:"source"`
-	EntityID        string                 `json:"entity_id,omitempty"`
-	TripID          string                 `json:"trip_id,omitempty"`
-	RouteID         string                 `json:"route_id,omitempty"`
-	StartDate       string                 `json:"start_date,omitempty"`
-	StartTime       string                 `json:"start_time,omitempty"`
-	VehicleID       string                 `json:"vehicle_id,omitempty"`
-	Label           string                 `json:"label,omitempty"`
-	LicensePlate    string                 `json:"license_plate,omitempty"`
-	StopID          string                 `json:"stop_id,omitempty"`
-	CurrentStatus   string                 `json:"current_status,omitempty"`
-	OccupancyStatus string                 `json:"occupancy_status,omitempty"`
-	TimestampUTC    string                 `json:"timestamp_utc,omitempty"`
-	Position        *vehiclePositionResult `json:"position,omitempty"`
+	Source           string                 `json:"source"`
+	EntityID         string                 `json:"entity_id,omitempty"`
+	FeedEntityID     string                 `json:"feed_entity_id,omitempty"`
+	TripID           string                 `json:"trip_id,omitempty"`
+	StaticGTFSTripID string                 `json:"static_gtfs_trip_id,omitempty"`
+	GTFSTripID       string                 `json:"gtfs_trip_id,omitempty"`
+	RouteID          string                 `json:"route_id,omitempty"`
+	GTFSRouteID      string                 `json:"gtfs_route_id,omitempty"`
+	StartDate        string                 `json:"start_date,omitempty"`
+	StartTime        string                 `json:"start_time,omitempty"`
+	PublicLabel      string                 `json:"public_label,omitempty"`
+	LicensePlate     string                 `json:"license_plate,omitempty"`
+	StopID           string                 `json:"stop_id,omitempty"`
+	GTFSStopID       string                 `json:"gtfs_stop_id,omitempty"`
+	CurrentStatus    string                 `json:"current_status,omitempty"`
+	OccupancyStatus  string                 `json:"occupancy_status,omitempty"`
+	ObservationState string                 `json:"observation_state"`
+	ObservedAt       string                 `json:"observed_at,omitempty"`
+	AgeSeconds       *int64                 `json:"age_seconds,omitempty"`
+	FeedState        string                 `json:"feed_state"`
+	FeedObservedAt   string                 `json:"feed_observed_at,omitempty"`
+	FeedAgeSeconds   *int64                 `json:"feed_age_seconds,omitempty"`
+	Position         *vehiclePositionResult `json:"position,omitempty"`
 }
 
 type vehiclePositionResult struct {
@@ -161,14 +205,29 @@ type vehiclePositionResult struct {
 	Northing    *float64 `json:"northing,omitempty"`
 	Direction   string   `json:"direction,omitempty"`
 	Bearing     *float64 `json:"bearing,omitempty"`
+	Speed       *float64 `json:"speed,omitempty"`
 	Supplier    string   `json:"supplier,omitempty"`
 	DatetimeUTC string   `json:"datetime_utc,omitempty"`
 	ExpiryTime  string   `json:"expiry_time,omitempty"`
 	Kind        string   `json:"kind"`
 }
 
+// vehicleDescriptorResult keeps the command's JSON independent from the
+// upstream transport DTO. ID is PTV's public descriptor value; GTFS-R private
+// vehicle identifiers never enter this type.
+type vehicleDescriptorResult struct {
+	Operator       string `json:"operator"`
+	ID             string `json:"id"`
+	LowFloor       *bool  `json:"low_floor"`
+	AirConditioned *bool  `json:"air_conditioned"`
+	Description    string `json:"description"`
+	Supplier       string `json:"supplier"`
+	Length         string `json:"length"`
+}
+
 type vehicleStopResult struct {
 	StopID                int     `json:"stop_id"`
+	PTVStopID             int     `json:"ptv_stop_id"`
 	StopName              string  `json:"stop_name"`
 	StopLatitude          float64 `json:"stop_latitude,omitempty"`
 	StopLongitude         float64 `json:"stop_longitude,omitempty"`
@@ -183,6 +242,19 @@ type routeRun struct {
 }
 
 var errVehicleNotFound = errors.New("vehicle not found")
+
+func validateVehicleRouteScan(limit int) error {
+	if limit < 0 || limit > vehicleMaxRouteScan {
+		return fmt.Errorf("--scan-routes must be between 0 and %d", vehicleMaxRouteScan)
+	}
+	return nil
+}
+
+func lookupVehicleWithinBudget(parent context.Context, client concreteVehicleClient, query string, hints vehicleLookupHints, budget time.Duration) (*vehicleResult, error) {
+	ctx, cancel := context.WithTimeout(parent, budget)
+	defer cancel()
+	return lookupVehicleWithHints(ctx, client, query, hints)
+}
 
 func lookupVehicleWithHints(ctx context.Context, client concreteVehicleClient, query string, hints vehicleLookupHints) (*vehicleResult, error) {
 	if strings.TrimSpace(hints.Stop) != "" {
@@ -237,26 +309,30 @@ func enrichWithGTFSRealtime(ctx context.Context, client gtfsRealtimeVehicleClien
 	if result == nil || !shouldMentionGTFSRealtime(result) {
 		return result
 	}
+	label, ok := vehicleRealtimeLookupLabel(query, result)
+	if !ok {
+		if result.RunRef != "" {
+			result.Warnings = append(result.Warnings, "GTFS Realtime was not joined to the PTV run_ref because PTV run references and static GTFS trip/entity identifiers are different namespaces")
+		}
+		return result
+	}
 
 	var errors []string
 	for _, source := range vehicleRealtimeSources(result) {
-		feed, err := client.FetchVehiclePositions(ctx, source.Feed.URL)
+		if err := ctx.Err(); err != nil {
+			result.Warnings = append(result.Warnings, "GTFS Realtime vehicle enrichment stopped: "+err.Error())
+			return result
+		}
+		snapshot, err := client.FetchSnapshot(ctx, source.Feed)
 		if err != nil {
 			errors = append(errors, source.Feed.ID+": "+err.Error())
 			continue
 		}
-
-		var vehicle *gtfsrt.Vehicle
-		if result.RunRef != "" {
-			vehicle = gtfsrt.FindByRunRef(feed, result.RunRef)
-		}
-		if vehicle == nil {
-			vehicle = gtfsrt.FindByVehicleID(feed, query)
-		}
-		if vehicle == nil {
+		observation, found := snapshot.FindVehicleByLabel(label)
+		if !found {
 			continue
 		}
-		return applyGTFSRealtimeVehicle(result, source, *vehicle)
+		return applyGTFSRealtimeVehicle(result, source, *observation)
 	}
 
 	if len(errors) > 0 {
@@ -269,6 +345,25 @@ func enrichWithGTFSRealtime(ctx context.Context, client gtfsRealtimeVehicleClien
 		result.Warnings = append(result.Warnings, fmt.Sprintf("GTFS Realtime %s vehicle-position feed did not expose a matching vehicle", strings.ToLower(routeTypeName(*result.RouteType))))
 	}
 	return result
+}
+
+func vehicleRealtimeLookupLabel(query string, result *vehicleResult) (gtfsrt.PublicVehicleLabel, bool) {
+	if result == nil {
+		return "", false
+	}
+	if result.Descriptor != nil && strings.TrimSpace(result.Descriptor.ID) != "" {
+		return gtfsrt.PublicVehicleLabel(strings.TrimSpace(result.Descriptor.ID)), true
+	}
+	if strings.TrimSpace(result.PublicLabel) != "" {
+		return gtfsrt.PublicVehicleLabel(strings.TrimSpace(result.PublicLabel)), true
+	}
+	if strings.Contains(result.MatchedBy, "vehicle_descriptor.id") && strings.TrimSpace(result.VehicleID) != "" {
+		return gtfsrt.PublicVehicleLabel(strings.TrimSpace(result.VehicleID)), true
+	}
+	if result.MatchedBy == "none" && strings.TrimSpace(query) != "" {
+		return gtfsrt.PublicVehicleLabel(strings.TrimSpace(query)), true
+	}
+	return "", false
 }
 
 type realtimeVehicleSource struct {
@@ -328,24 +423,18 @@ func realtimeFeedRouteType(feed gtfsrt.Feed) (int, bool) {
 	}
 }
 
-func applyGTFSRealtimeVehicle(result *vehicleResult, source realtimeVehicleSource, vehicle gtfsrt.Vehicle) *vehicleResult {
-	result.GTFSRealtime = gtfsRealtimeFromVehicle(source.Feed, vehicle)
+func applyGTFSRealtimeVehicle(result *vehicleResult, source realtimeVehicleSource, observation gtfsrt.VehicleObservation) *vehicleResult {
+	result.GTFSRealtime = gtfsRealtimeFromObservation(source.Feed, observation)
+	if result.PublicLabel == "" {
+		result.PublicLabel = string(observation.Label)
+	}
 	if result.MatchedBy == "none" {
-		result.MatchedBy = "gtfs_realtime.vehicle"
+		result.MatchedBy = "gtfs_realtime.public_label"
 		result.RouteType = intPtr(source.RouteType)
 		result.Mode = source.Mode
-		result.RunRef = vehicle.TripID
-		result.Route = vehicle.RouteID
-		result.ServiceState = "current"
-		result.Status = strings.TrimPrefix(vehicle.CurrentStatus, "VEHICLE_STOP_STATUS_")
+		result.ServiceState = result.GTFSRealtime.ObservationState
+		result.Status = strings.TrimPrefix(observation.CurrentStatus, "VEHICLE_STOP_STATUS_")
 		result.Warnings = nil
-	}
-	if result.Position == nil && result.GTFSRealtime.Position != nil {
-		result.Position = result.GTFSRealtime.Position
-		result.PositionSource = source.Feed.Title
-	}
-	if result.VehicleID == "" {
-		result.VehicleID = firstNonEmptyString(vehicle.Label, vehicle.VehicleID, vehicle.LicensePlate)
 	}
 	return result
 }
@@ -376,41 +465,65 @@ func shouldMentionGTFSRealtimeBus(result *vehicleResult) bool {
 	return result.MatchedBy == "none"
 }
 
-func gtfsRealtimeFromVehicle(feed gtfsrt.Feed, vehicle gtfsrt.Vehicle) *vehicleGTFSRealtime {
+func gtfsRealtimeFromObservation(feed gtfsrt.Feed, observation gtfsrt.VehicleObservation) *vehicleGTFSRealtime {
 	result := &vehicleGTFSRealtime{
-		Source:          feed.Title,
-		EntityID:        vehicle.EntityID,
-		TripID:          vehicle.TripID,
-		RouteID:         vehicle.RouteID,
-		StartDate:       vehicle.StartDate,
-		StartTime:       vehicle.StartTime,
-		VehicleID:       vehicle.VehicleID,
-		Label:           vehicle.Label,
-		LicensePlate:    vehicle.LicensePlate,
-		StopID:          vehicle.StopID,
-		CurrentStatus:   vehicle.CurrentStatus,
-		OccupancyStatus: vehicle.OccupancyStatus,
-		TimestampUTC:    vehicle.TimestampUTC,
+		Source:           feed.Title,
+		EntityID:         string(observation.EntityID),
+		FeedEntityID:     string(observation.EntityID),
+		TripID:           string(observation.TripID),
+		StaticGTFSTripID: string(observation.TripID),
+		GTFSTripID:       string(observation.TripID),
+		RouteID:          string(observation.RouteID),
+		GTFSRouteID:      string(observation.RouteID),
+		StartDate:        observation.StartDate,
+		StartTime:        observation.StartTime,
+		PublicLabel:      string(observation.Label),
+		LicensePlate:     observation.LicensePlate,
+		StopID:           string(observation.StopID),
+		GTFSStopID:       string(observation.StopID),
+		CurrentStatus:    observation.CurrentStatus,
+		OccupancyStatus:  observation.OccupancyStatus,
+		ObservationState: normalizeVehicleFreshness(observation.Freshness.Overall),
+		AgeSeconds:       observation.Freshness.Entity.AgeSeconds,
+		FeedState:        normalizeVehicleFreshness(observation.Freshness.Feed.State),
+		FeedAgeSeconds:   observation.Freshness.Feed.AgeSeconds,
 	}
-	if vehicle.Latitude != nil && vehicle.Longitude != nil {
+	if observation.ObservedAt != nil {
+		result.ObservedAt = observation.ObservedAt.UTC().Format(time.RFC3339)
+	}
+	if observation.Freshness.Feed.ObservedAt != nil {
+		result.FeedObservedAt = observation.Freshness.Feed.ObservedAt.UTC().Format(time.RFC3339)
+	}
+	if observation.Latitude != nil || observation.Longitude != nil {
 		result.Position = &vehiclePositionResult{
-			Latitude:    vehicle.Latitude,
-			Longitude:   vehicle.Longitude,
-			Bearing:     vehicle.Bearing,
-			DatetimeUTC: vehicle.TimestampUTC,
+			Latitude:    normalizeVehicleCoordinate(observation.Latitude),
+			Longitude:   normalizeVehicleCoordinate(observation.Longitude),
+			Bearing:     observation.Bearing,
+			Speed:       observation.Speed,
+			DatetimeUTC: result.ObservedAt,
 			Kind:        "gtfs_realtime_vehicle_position",
 		}
 	}
 	return result
 }
 
-func firstNonEmptyString(vals ...string) string {
-	for _, val := range vals {
-		if strings.TrimSpace(val) != "" {
-			return val
-		}
+func normalizeVehicleFreshness(state gtfsrt.FreshnessState) string {
+	switch state {
+	case gtfsrt.FreshnessCurrent:
+		return string(gtfsrt.FreshnessCurrent)
+	case gtfsrt.FreshnessStale:
+		return string(gtfsrt.FreshnessStale)
+	default:
+		return string(gtfsrt.FreshnessUnknown)
 	}
-	return ""
+}
+
+func normalizeVehicleCoordinate(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	rounded := math.Round(*value*1_000_000) / 1_000_000
+	return &rounded
 }
 
 func hintedVehicleNotFound(query string) *vehicleResult {
@@ -444,14 +557,14 @@ func lookupVehicleAtStop(ctx context.Context, client concreteVehicleClient, quer
 			if result, err := lookupVehicleInStopDepartures(ctx, client, query, stop, routeWithType(route, probeRouteType), probeRouteType, false); err == nil {
 				return result, nil
 			} else if !errors.Is(err, errVehicleNotFound) {
-				continue
+				return nil, err
 			}
 		}
 		for _, probeRouteType := range routeTypesToProbe() {
 			if result, err := lookupVehicleInStopDepartures(ctx, client, query, stop, routeWithType(route, probeRouteType), probeRouteType, true); err == nil {
 				return result, nil
 			} else if !errors.Is(err, errVehicleNotFound) {
-				continue
+				return nil, err
 			}
 		}
 		return nil, errVehicleNotFound
@@ -477,7 +590,7 @@ func lookupVehicleAtStop(ctx context.Context, client concreteVehicleClient, quer
 		if result, err := lookupVehicleInStopDepartures(ctx, client, query, stop, nil, probeRouteType, false); err == nil {
 			return result, nil
 		} else if !errors.Is(err, errVehicleNotFound) {
-			continue
+			return nil, err
 		}
 	}
 	for _, probeRouteType := range routeTypesToProbe() {
@@ -487,7 +600,7 @@ func lookupVehicleAtStop(ctx context.Context, client concreteVehicleClient, quer
 		if result, err := lookupVehicleInStopDepartures(ctx, client, query, stop, nil, probeRouteType, true); err == nil {
 			return result, nil
 		} else if !errors.Is(err, errVehicleNotFound) {
-			continue
+			return nil, err
 		}
 	}
 	return nil, errVehicleNotFound
@@ -508,7 +621,13 @@ func lookupVehicleInStopDepartures(ctx context.Context, client concreteVehicleCl
 		},
 	})
 	if err != nil {
+		if ptvapi.IsKind(err, ptvapi.ErrorNotFound) {
+			return nil, errVehicleNotFound
+		}
 		return nil, err
+	}
+	if resp == nil {
+		return nil, errVehicleNotFound
 	}
 
 	var matches []vehicleDepartureMatch
@@ -685,7 +804,8 @@ func vehicleStopFromDeparture(stop *ptvapi.StopModel, departure ptvapi.Departure
 	}
 	result := &vehicleStopResult{
 		StopID:            stop.StopID,
-		StopName:          stop.StopName,
+		PTVStopID:         stop.StopID,
+		StopName:          normalizedText(stop.StopName),
 		StopLatitude:      stop.StopLatitude,
 		StopLongitude:     stop.StopLongitude,
 		DepartureSequence: departure.DepartureSequence,
@@ -724,25 +844,30 @@ func lookupVehicleDescriptor(ctx context.Context, client vehicleLookupClient, qu
 }
 
 func lookupRunRef(ctx context.Context, client vehicleLookupClient, query string) (*vehicleResult, error) {
-	var lastErr error
-	for _, routeType := range routeTypesToProbe() {
-		resp, err := client.Run(ctx, query, routeType, vehicleRunsOptions())
-		if err != nil {
-			lastErr = err
-			continue
+	response, err := client.RunsByRef(ctx, ptvapi.RunRef(query), vehicleRunsOptions())
+	if err != nil {
+		if ptvapi.IsKind(err, ptvapi.ErrorNotFound) {
+			return nil, errVehicleNotFound
 		}
-		if resp.Run.RunRef == "" {
-			continue
-		}
-		result := resultFromRun("run_ref", query, ptvapi.Route{RouteID: resp.Run.RouteID, RouteType: routeType}, resp.Run)
-		result.Warnings = append(result.Warnings, "matched a PTV run_ref, not a physical vehicle id")
-		attachNextStop(ctx, client, result)
-		return result, nil
+		return nil, err
 	}
-	if lastErr != nil {
+	if response == nil || len(response.Runs) == 0 {
 		return nil, errVehicleNotFound
 	}
-	return nil, errVehicleNotFound
+	run := response.Runs[0]
+	for _, candidate := range response.Runs {
+		if strings.EqualFold(strings.TrimSpace(candidate.RunRef), strings.TrimSpace(query)) {
+			run = candidate
+			break
+		}
+	}
+	if strings.TrimSpace(run.RunRef) == "" {
+		return nil, errVehicleNotFound
+	}
+	result := resultFromRun("run_ref", query, ptvapi.Route{RouteID: run.RouteID, RouteType: run.RouteType}, run)
+	result.Warnings = append(result.Warnings, "matched a PTV run_ref, not a physical vehicle id")
+	attachNextStop(ctx, client, result)
+	return result, nil
 }
 
 func scanRunsForVehicleID(ctx context.Context, client vehicleLookupClient, query string, routeScanLimit int) ([]routeRun, error) {
@@ -753,8 +878,17 @@ func scanRunsForVehicleID(ctx context.Context, client vehicleLookupClient, query
 
 	var matches []routeRun
 	for _, route := range routes {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		resp, err := client.RunsForRoute(ctx, route.RouteID, route.RouteType, vehicleRunsOptions())
 		if err != nil {
+			if ptvapi.IsKind(err, ptvapi.ErrorNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		if resp == nil {
 			continue
 		}
 		for _, run := range resp.Runs {
@@ -802,18 +936,14 @@ func vehicleDescriptorParts(id string) []string {
 }
 
 func allRoutes(ctx context.Context, client vehicleLookupClient, limit int) ([]ptvapi.Route, error) {
-	var routes []ptvapi.Route
-	for _, routeType := range routeTypesToProbe() {
-		resp, err := client.Routes(ctx, []int{routeType}, "")
-		if err != nil {
-			return nil, fmt.Errorf("loading %s routes: %w", strings.ToLower(routeTypeName(routeType)), err)
-		}
-		routes = append(routes, resp.Routes...)
-		if limit > 0 && len(routes) >= limit {
-			return routes[:limit], nil
-		}
+	response, err := client.Routes(ctx, routeTypesToProbe(), "")
+	if err != nil {
+		return nil, fmt.Errorf("loading routes: %w", err)
 	}
-	return routes, nil
+	if limit > 0 && len(response.Routes) > limit {
+		return response.Routes[:limit], nil
+	}
+	return response.Routes, nil
 }
 
 func resultFromRun(matchedBy, query string, route ptvapi.Route, run ptvapi.Run) *vehicleResult {
@@ -828,20 +958,27 @@ func resultFromRun(matchedBy, query string, route ptvapi.Route, run ptvapi.Run) 
 		Query:        query,
 		MatchedBy:    matchedBy,
 		RouteType:    intPtr(route.RouteType),
+		PTVRouteType: intPtr(route.RouteType),
 		Mode:         routeTypeName(route.RouteType),
 		RouteID:      route.RouteID,
+		PTVRouteID:   route.RouteID,
 		Route:        routeLabelForVehicle(route),
-		RunRef:       run.RunRef,
-		Destination:  run.DestinationName,
-		Status:       run.Status,
+		RunRef:       strings.TrimSpace(run.RunRef),
+		PTVRunRef:    strings.TrimSpace(run.RunRef),
+		Destination:  normalizedText(run.DestinationName),
+		Status:       normalizedText(run.Status),
 		ServiceState: "current",
-		Descriptor:   run.VehicleDescriptor,
+		Descriptor:   newVehicleDescriptorResult(run.VehicleDescriptor),
 	}
 	if run.VehicleDescriptor != nil && run.VehicleDescriptor.ID != "" {
-		result.VehicleID = run.VehicleDescriptor.ID
+		result.VehicleID = strings.TrimSpace(run.VehicleDescriptor.ID)
+		result.PTVDescriptorID = result.VehicleID
+		result.PublicLabel = result.VehicleID
 	}
 	if result.VehicleID == "" && matchedBy == "vehicle_descriptor.id" {
 		result.VehicleID = query
+		result.PTVDescriptorID = query
+		result.PublicLabel = query
 	}
 	if run.VehiclePosition != nil {
 		result.Position = vehiclePositionFromPTV(run.VehiclePosition)
@@ -860,11 +997,11 @@ func vehiclePositionFromPTV(pos *ptvapi.VehiclePosition) *vehiclePositionResult 
 		Longitude:   pos.Longitude,
 		Easting:     pos.Easting,
 		Northing:    pos.Northing,
-		Direction:   pos.Direction,
+		Direction:   normalizedText(pos.Direction),
 		Bearing:     pos.Bearing,
-		Supplier:    pos.Supplier,
-		DatetimeUTC: pos.DatetimeUTC,
-		ExpiryTime:  pos.ExpiryTime,
+		Supplier:    normalizedText(pos.Supplier),
+		DatetimeUTC: strings.TrimSpace(pos.DatetimeUTC),
+		ExpiryTime:  strings.TrimSpace(pos.ExpiryTime),
 		Kind:        "unknown",
 	}
 	if pos.Latitude != nil && pos.Longitude != nil {
@@ -912,9 +1049,9 @@ func nextStopFromPattern(pattern *ptvapi.StoppingPatternResponse) *vehicleStopRe
 		if !when.IsZero() && when.Before(now.Add(-2*time.Minute)) {
 			continue
 		}
-		stop := vehicleStopResult{StopID: dep.StopID, DepartureSequence: dep.DepartureSequence}
+		stop := vehicleStopResult{StopID: dep.StopID, PTVStopID: dep.StopID, DepartureSequence: dep.DepartureSequence}
 		if s, ok := pattern.Stops[strconv.Itoa(dep.StopID)]; ok {
-			stop.StopName = s.StopName
+			stop.StopName = normalizedText(s.StopName)
 			stop.StopLatitude = s.StopLatitude
 			stop.StopLongitude = s.StopLongitude
 		}
@@ -941,14 +1078,16 @@ func routeTypesToProbe() []int {
 }
 
 func routeLabelForVehicle(route ptvapi.Route) string {
-	if route.RouteNumber != "" && route.RouteName != "" {
-		return route.RouteNumber + " " + route.RouteName
+	number := normalizedText(route.RouteNumber)
+	name := normalizedText(route.RouteName)
+	if number != "" && name != "" {
+		return number + " " + name
 	}
-	if route.RouteNumber != "" {
-		return route.RouteNumber
+	if number != "" {
+		return number
 	}
-	if route.RouteName != "" {
-		return route.RouteName
+	if name != "" {
+		return name
 	}
 	if route.RouteID > 0 {
 		return strconv.Itoa(route.RouteID)
@@ -964,7 +1103,10 @@ func printVehicleResult(result *vehicleResult) {
 		return
 	}
 
-	name := result.VehicleID
+	name := result.PublicLabel
+	if name == "" {
+		name = result.VehicleID
+	}
 	if name == "" {
 		name = result.Query
 	}
@@ -994,7 +1136,19 @@ func printVehicleResult(result *vehicleResult) {
 	printVehicleWarnings(result.Warnings)
 }
 
-func printVehicleDescriptor(desc *ptvapi.VehicleDescriptor) {
+func newVehicleDescriptorResult(desc *ptvapi.VehicleDescriptor) *vehicleDescriptorResult {
+	if desc == nil {
+		return nil
+	}
+	return &vehicleDescriptorResult{
+		Operator: normalizedText(desc.Operator), ID: strings.TrimSpace(desc.ID),
+		LowFloor: desc.LowFloor, AirConditioned: desc.AirConditioned,
+		Description: normalizedText(desc.Description), Supplier: normalizedText(desc.Supplier),
+		Length: normalizedText(desc.Length),
+	}
+}
+
+func printVehicleDescriptor(desc *vehicleDescriptorResult) {
 	if desc == nil {
 		return
 	}
@@ -1032,6 +1186,9 @@ func printVehiclePosition(pos *vehiclePositionResult, source string) {
 	if pos.Bearing != nil {
 		fmt.Printf("Bearing: %.0f\n", *pos.Bearing)
 	}
+	if pos.Speed != nil {
+		fmt.Printf("Speed: %.1f m/s\n", *pos.Speed)
+	}
 	if pos.DatetimeUTC != "" {
 		fmt.Printf("Position time: %s\n", render.CleanText(formatVehicleTime(pos.DatetimeUTC)))
 	}
@@ -1045,17 +1202,18 @@ func printVehicleGTFSRealtime(info *vehicleGTFSRealtime) {
 		return
 	}
 	fmt.Println("GTFS Realtime")
-	if info.VehicleID != "" {
-		fmt.Printf("  Vehicle ID: %s\n", render.CleanText(info.VehicleID))
+	fmt.Printf("  Source: %s\n", render.CleanText(info.Source))
+	if info.PublicLabel != "" {
+		fmt.Printf("  Public label: %s\n", render.CleanText(info.PublicLabel))
 	}
-	if info.Label != "" {
-		fmt.Printf("  Label: %s\n", render.CleanText(info.Label))
+	if info.EntityID != "" {
+		fmt.Printf("  Feed entity ID: %s\n", render.CleanText(info.EntityID))
 	}
 	if info.LicensePlate != "" {
 		fmt.Printf("  Licence plate: %s\n", render.CleanText(info.LicensePlate))
 	}
 	if info.TripID != "" {
-		fmt.Printf("  Trip ID: %s\n", render.CleanText(info.TripID))
+		fmt.Printf("  Static GTFS trip ID: %s\n", render.CleanText(info.TripID))
 	}
 	if info.RouteID != "" {
 		fmt.Printf("  GTFS route ID: %s\n", render.CleanText(info.RouteID))
@@ -1069,8 +1227,30 @@ func printVehicleGTFSRealtime(info *vehicleGTFSRealtime) {
 	if info.OccupancyStatus != "" {
 		fmt.Printf("  Occupancy: %s\n", render.CleanText(info.OccupancyStatus))
 	}
-	if info.TimestampUTC != "" {
-		fmt.Printf("  Timestamp: %s\n", render.CleanText(formatVehicleTime(info.TimestampUTC)))
+	fmt.Printf("  Observation state: %s\n", render.CleanText(info.ObservationState))
+	if info.ObservedAt != "" {
+		fmt.Printf("  Observed at: %s\n", render.CleanText(formatVehicleTime(info.ObservedAt)))
+	}
+	if info.AgeSeconds != nil {
+		fmt.Printf("  Observation age: %s\n", render.CleanText(formatVehicleAge(*info.AgeSeconds)))
+	}
+	fmt.Printf("  Feed state: %s\n", render.CleanText(info.FeedState))
+	if info.FeedObservedAt != "" {
+		fmt.Printf("  Feed observed at: %s\n", render.CleanText(formatVehicleTime(info.FeedObservedAt)))
+	}
+	if info.FeedAgeSeconds != nil {
+		fmt.Printf("  Feed age: %s\n", render.CleanText(formatVehicleAge(*info.FeedAgeSeconds)))
+	}
+	if position := info.Position; position != nil {
+		if position.Latitude != nil && position.Longitude != nil {
+			fmt.Printf("  Position: %.6f, %.6f\n", *position.Latitude, *position.Longitude)
+		}
+		if position.Bearing != nil {
+			fmt.Printf("  Bearing: %.0f\n", *position.Bearing)
+		}
+		if position.Speed != nil {
+			fmt.Printf("  Speed: %.1f m/s\n", *position.Speed)
+		}
 	}
 }
 
@@ -1112,9 +1292,9 @@ func printVehicleWarnings(warnings []string) {
 	if len(warnings) == 0 {
 		return
 	}
-	fmt.Println("\nWarnings")
+	fmt.Fprintln(os.Stderr, "\nWarnings")
 	for _, warning := range warnings {
-		fmt.Printf("  - %s\n", render.CleanText(warning))
+		fmt.Fprintf(os.Stderr, "  - %s\n", render.CleanText(warning))
 	}
 }
 
@@ -1123,11 +1303,18 @@ func formatVehicleTime(utc string) string {
 	if err != nil {
 		return utc
 	}
-	return t.Local().Format("2006-01-02 15:04:05")
+	return localtime.InMelbourne(t).Format("2006-01-02 15:04:05")
+}
+
+func formatVehicleAge(seconds int64) string {
+	if seconds < 0 {
+		return fmt.Sprintf("%ds in the future", -seconds)
+	}
+	return (time.Duration(seconds) * time.Second).String()
 }
 
 func init() {
-	vehicleCmd.Flags().IntVar(&vehicleScanRoutes, "scan-routes", 0, "scan this many routes when matching physical vehicle ids without a stop hint (0 = disabled)")
+	vehicleCmd.Flags().IntVar(&vehicleScanRoutes, "scan-routes", 0, fmt.Sprintf("scan up to this many routes when matching physical vehicle ids without a stop hint (0 = disabled, max %d)", vehicleMaxRouteScan))
 	vehicleCmd.Flags().StringVar(&vehicleStop, "stop", "", "hint: stop or station where the vehicle was seen")
 	vehicleCmd.Flags().StringVar(&vehicleRoute, "route", "", "hint: route or line where the vehicle was seen")
 	rootCmd.AddCommand(vehicleCmd)

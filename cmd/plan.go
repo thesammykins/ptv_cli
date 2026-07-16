@@ -2,29 +2,154 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/thesammykins/ptv_cli/internal/geocode"
 	"github.com/thesammykins/ptv_cli/internal/gtfs"
+	"github.com/thesammykins/ptv_cli/internal/localtime"
 	"github.com/thesammykins/ptv_cli/internal/model"
 	"github.com/thesammykins/ptv_cli/internal/render"
 	"github.com/thesammykins/ptv_cli/internal/router"
 )
 
 var (
-	planDepart        string
-	planArriveBy      string
-	planDate          string
-	planRadius        float64
-	planNoGeocode     bool
-	planNoDisruptions bool
-	planNoUpdateCheck bool
+	planDepart           string
+	planArriveBy         string
+	planDate             string
+	planRadius           float64
+	planNoGeocode        bool
+	planNoDisruptions    bool
+	planNoUpdateCheck    bool
+	planAllowConditional bool
 )
+
+const planWalkingSpeedMetresPerSecond = 1.4
+const defaultPlanOptionalNetworkBudget = 1500 * time.Millisecond
+
+var planOptionalNetworkBudget = defaultPlanOptionalNetworkBudget
+
+var planTimetableHorizons = []time.Duration{
+	2 * time.Hour,
+	6 * time.Hour,
+	gtfs.TimetableHorizon,
+}
+
+type planFreshnessResult struct {
+	report gtfs.FreshnessReport
+	err    error
+}
+
+type planStopResolution struct {
+	Endpoints   []model.Endpoint
+	Label       string
+	Attribution string
+}
+
+type planOutput struct {
+	Legs        []planLegOutput        `json:"legs"`
+	Depart      string                 `json:"depart"`
+	Arrive      string                 `json:"arrive"`
+	Transfers   int                    `json:"transfers"`
+	Disruptions []planDisruptionOutput `json:"disruptions,omitempty"`
+	TimeZone    string                 `json:"time_zone"`
+	Attribution []string               `json:"attribution,omitempty"`
+	Warnings    []string               `json:"warnings,omitempty"`
+}
+
+type planLegOutput struct {
+	Walk           bool                        `json:"walk"`
+	From           planStopOutput              `json:"from"`
+	To             planStopOutput              `json:"to"`
+	Depart         string                      `json:"depart"`
+	Arrive         string                      `json:"arrive"`
+	RouteShortName string                      `json:"route_short_name,omitempty"`
+	RouteLongName  string                      `json:"route_long_name,omitempty"`
+	Mode           int                         `json:"mode,omitempty"`
+	GTFSFeedMode   int                         `json:"gtfs_feed_mode,omitempty"`
+	Headsign       string                      `json:"headsign,omitempty"`
+	TripID         string                      `json:"trip_id,omitempty"`
+	GTFSTripID     string                      `json:"gtfs_trip_id,omitempty"`
+	BlockID        string                      `json:"block_id,omitempty"`
+	GTFSBlockID    string                      `json:"gtfs_block_id,omitempty"`
+	StayOnboard    bool                        `json:"stay_onboard,omitempty"`
+	Conditional    bool                        `json:"conditional,omitempty"`
+	PickupPolicy   model.PassengerActionPolicy `json:"pickup_policy,omitempty"`
+	DropOffPolicy  model.PassengerActionPolicy `json:"drop_off_policy,omitempty"`
+	Disrupted      bool                        `json:"disrupted,omitempty"`
+	DisruptionIDs  []int64                     `json:"disruption_ids,omitempty"`
+	PTVDisruptions []int64                     `json:"ptv_disruption_ids,omitempty"`
+}
+
+type planStopOutput struct {
+	Index      int     `json:"index"`
+	ID         string  `json:"id"`
+	GTFSStopID string  `json:"gtfs_stop_id,omitempty"`
+	Name       string  `json:"name"`
+	Lat        float64 `json:"lat"`
+	Lon        float64 `json:"lon"`
+	Mode       int     `json:"mode"`
+	GTFSMode   int     `json:"gtfs_feed_mode"`
+}
+
+type planDisruptionOutput struct {
+	ID     int64  `json:"id"`
+	PTVID  int64  `json:"ptv_disruption_id"`
+	Title  string `json:"title"`
+	Status string `json:"status,omitempty"`
+	Type   string `json:"type,omitempty"`
+	URL    string `json:"url,omitempty"`
+}
+
+func newPlanOutput(journey *model.Journey, attribution, warnings []string) planOutput {
+	output := planOutput{
+		Legs:        make([]planLegOutput, 0, len(journey.Legs)),
+		Depart:      formatPlanTime(journey.DepTime),
+		Arrive:      formatPlanTime(journey.ArrTime),
+		Transfers:   journey.Transfers,
+		TimeZone:    "Australia/Melbourne",
+		Attribution: attribution,
+		Warnings:    warnings,
+	}
+	for _, leg := range journey.Legs {
+		output.Legs = append(output.Legs, planLegOutput{
+			Walk: leg.Walk, From: newPlanStopOutput(leg.FromStop), To: newPlanStopOutput(leg.ToStop),
+			Depart: formatPlanTime(leg.DepTime), Arrive: formatPlanTime(leg.ArrTime),
+			RouteShortName: normalizedText(leg.RouteShortName), RouteLongName: normalizedText(leg.RouteLongName),
+			Mode: leg.RouteType, GTFSFeedMode: leg.RouteType, Headsign: normalizedText(leg.Headsign),
+			TripID: leg.TripID, GTFSTripID: leg.TripID, BlockID: leg.BlockID, GTFSBlockID: leg.BlockID,
+			StayOnboard: leg.StayOnboard, Conditional: leg.Conditional,
+			PickupPolicy: leg.PickupPolicy, DropOffPolicy: leg.DropOffPolicy,
+			Disrupted: leg.Disrupted, DisruptionIDs: leg.DisruptionIDs, PTVDisruptions: leg.DisruptionIDs,
+		})
+	}
+	for _, disruption := range journey.Disruptions {
+		output.Disruptions = append(output.Disruptions, planDisruptionOutput{
+			ID: disruption.ID, PTVID: disruption.ID, Title: normalizedText(disruption.Title),
+			Status: normalizedText(disruption.Status), Type: normalizedText(disruption.Type), URL: normalizedPublicURL(disruption.URL),
+		})
+	}
+	return output
+}
+
+func newPlanStopOutput(stop model.Stop) planStopOutput {
+	return planStopOutput{
+		Index: stop.Index, ID: stop.ID, GTFSStopID: stop.ID,
+		Name: normalizedText(stop.Name), Lat: stop.Lat, Lon: stop.Lon,
+		Mode: stop.Mode, GTFSMode: stop.Mode,
+	}
+}
+
+func formatPlanTime(value time.Time) string {
+	return value.In(melbourneLocation()).Format(time.RFC3339)
+}
 
 var planCmd = &cobra.Command{
 	Use:   "plan <from> <to>",
@@ -55,18 +180,25 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 			return fmt.Errorf("use only one of --depart or --arrive-by")
 		}
 
-		cfg, err := loadConfig()
+		cfg, err := loadRuntimeConfig()
 		if err != nil {
 			return err
 		}
-		store, err := gtfs.Open(cfg.DBPath())
+		manager, err := gtfs.NewGenerationManager(cfg.DataDir)
 		if err != nil {
+			return err
+		}
+		store, _, err := manager.OpenCurrent(cmd.Context())
+		if err != nil {
+			if errors.Is(err, gtfs.ErrLegacyDatabase) {
+				return fmt.Errorf("legacy GTFS data requires a one-time re-ingest; run 'ptv gtfs update' first")
+			}
+			if errors.Is(err, gtfs.ErrNoCurrentGeneration) {
+				return fmt.Errorf("GTFS data not ingested yet; run 'ptv gtfs update' first")
+			}
 			return err
 		}
 		defer store.Close()
-		if !store.IsIngested() {
-			return fmt.Errorf("GTFS data not ingested yet; run 'ptv gtfs update' first")
-		}
 
 		loc := melbourneLocation()
 		now := time.Now().In(loc)
@@ -85,58 +217,134 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 			}
 		}
 
+		// Freshness and disruption overlays share one command-level budget that
+		// starts before the local timetable work. A slow optional endpoint can
+		// therefore never add serial timeout windows after routing completes.
+		optionalCtx := cmd.Context()
+		cancelOptional := func() {}
+		if !planNoUpdateCheck || !planNoDisruptions {
+			optionalCtx, cancelOptional = context.WithTimeout(cmd.Context(), planOptionalNetworkBudget)
+		}
+		defer cancelOptional()
+
 		progress := newProgress()
 		progress.Start()
 
-		tt, err := store.LoadTimetable(queryTime)
+		direction := gtfs.TimetableForward
+		if arriveByMode {
+			direction = gtfs.TimetableReverse
+		}
+		horizonIndex := 0
+		tt, err := store.LoadTimetableWindowContext(
+			cmd.Context(), queryTime, direction, planTimetableHorizons[horizonIndex],
+		)
+		if errors.Is(err, gtfs.ErrQueryOutsideCoverage) {
+			// A query just beyond the service-date boundary can still be served by
+			// an overflowing previous service day. Retry the complete supported
+			// horizon before classifying it as outside coverage.
+			horizonIndex = len(planTimetableHorizons) - 1
+			tt, err = store.LoadTimetableWindowContext(
+				cmd.Context(), queryTime, direction, planTimetableHorizons[horizonIndex],
+			)
+		}
 		if err != nil {
 			progress.Stop()
+			if errors.Is(err, gtfs.ErrQueryOutsideCoverage) {
+				return fmt.Errorf("%w; run 'ptv gtfs update' to install current service coverage", err)
+			}
 			return err
 		}
 
+		var freshnessResult <-chan planFreshnessResult
 		if !planNoUpdateCheck {
-			rep := gtfs.Freshness(ctx(), store, cfg.GTFSURL, true, false)
-			warnings := freshnessWarnings(rep)
-			if len(warnings) > 0 {
+			state, stateErr := store.DatasetState(cmd.Context())
+			if stateErr != nil {
 				progress.Stop()
+				return stateErr
 			}
-			for _, w := range warnings {
-				fmt.Fprintln(os.Stderr, render.CleanText(w))
-			}
+			results := make(chan planFreshnessResult, 1)
+			freshnessResult = results
+			check := checkGTFSFreshnessForCommand
+			go func() {
+				report, checkErr := check(optionalCtx, cfg, state, queryTime, true, false)
+				results <- planFreshnessResult{report: report, err: checkErr}
+			}()
 		}
 
 		var geo *geocode.Geocoder
 		if !planNoGeocode {
-			geo = geocode.New(cfg.DataDir)
+			geo, err = geocode.NewWithOptions(geocode.Options{
+				Endpoint:    cfg.GeocoderURL,
+				Provider:    cfg.GeocoderProvider,
+				Attribution: cfg.GeocoderAttribution,
+				CacheDir:    filepath.Join(cfg.DataDir, "geocode"),
+				BeforeRequest: func(_ string) {
+					progress.Stop()
+					fmt.Fprintf(os.Stderr, "No local stop matched; sending the place query to %s.\n", render.CleanText(cfg.GeocoderProvider))
+				},
+			})
+			if err != nil {
+				progress.Stop()
+				return err
+			}
 		}
 
-		sources, fromLabel, err := resolvePlanStops(ctx(), tt, args[0], planRadius, geo)
+		source, err := resolvePlanEndpoints(cmd.Context(), tt, args[0], planRadius, geo)
 		if err != nil {
 			progress.Stop()
 			return fmt.Errorf("origin: %w", err)
 		}
-		targets, toLabel, err := resolvePlanStops(ctx(), tt, args[1], planRadius, geo)
+		target, err := resolvePlanEndpoints(cmd.Context(), tt, args[1], planRadius, geo)
 		if err != nil {
 			progress.Stop()
 			return fmt.Errorf("destination: %w", err)
 		}
 
-		var journey *model.Journey
-		if arriveByMode {
-			journey, err = router.PlanLatestDeparture(tt, sources, targets, queryTime)
-		} else {
-			journey, err = router.PlanEarliestArrival(tt, sources, targets, queryTime)
+		planJourney := func() (*model.Journey, error) {
+			if strings.EqualFold(strings.TrimSpace(args[0]), strings.TrimSpace(args[1])) {
+				return &model.Journey{Legs: []model.Leg{}, DepTime: queryTime, ArrTime: queryTime}, nil
+			}
+			if arriveByMode {
+				return router.PlanLatestDepartureContext(cmd.Context(), tt, source.Endpoints, target.Endpoints, queryTime, router.PlanOptions{AllowConditional: planAllowConditional})
+			}
+			return router.PlanEarliestArrivalContext(cmd.Context(), tt, source.Endpoints, target.Endpoints, queryTime, router.PlanOptions{AllowConditional: planAllowConditional})
+		}
+
+		journey, err := planJourney()
+		for errors.Is(err, router.ErrNoJourney) && horizonIndex+1 < len(planTimetableHorizons) {
+			horizonIndex++
+			tt, err = store.LoadTimetableWindowContext(
+				cmd.Context(), queryTime, direction, planTimetableHorizons[horizonIndex],
+			)
+			if err != nil {
+				break
+			}
+			journey, err = planJourney()
 		}
 		if err != nil {
 			progress.Stop()
+			if errors.Is(err, gtfs.ErrQueryOutsideCoverage) {
+				return fmt.Errorf("%w; run 'ptv gtfs update' to install current service coverage", err)
+			}
 			return err
 		}
 
 		// Overlay real-time disruptions onto the journey (best-effort).
 		var disruptionWarn string
+		if err := cmd.Context().Err(); err != nil {
+			progress.Stop()
+			return err
+		}
 		if !planNoDisruptions && len(journey.Legs) > 0 {
-			if client, _, cerr := loadClient(); cerr == nil {
-				if derr := annotateDisruptions(ctx(), client, journey); derr != nil {
+			if optionalCtx.Err() != nil {
+				disruptionWarn = "real-time disruptions skipped: optional network time budget exhausted"
+			} else if client, _, cerr := loadClient(); cerr == nil {
+				derr := annotateDisruptions(optionalCtx, client, journey)
+				if cmd.Context().Err() != nil {
+					progress.Stop()
+					return cmd.Context().Err()
+				}
+				if derr != nil {
 					disruptionWarn = "real-time disruptions unavailable: " + derr.Error()
 				}
 			} else {
@@ -145,14 +353,47 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 		}
 
 		progress.Stop()
-		if flagJSON {
-			return printJSON(journey)
+		var warnings []string
+		if freshnessResult != nil {
+			select {
+			case result := <-freshnessResult:
+				if cmd.Context().Err() != nil {
+					return cmd.Context().Err()
+				}
+				if result.err != nil {
+					warnings = append(warnings, "static GTFS freshness check unavailable: "+result.err.Error())
+				} else {
+					warnings = append(warnings, freshnessWarnings(result.report)...)
+				}
+			case <-optionalCtx.Done():
+				if cmd.Context().Err() != nil {
+					return cmd.Context().Err()
+				}
+				warnings = append(warnings, "static GTFS freshness check skipped: optional network time budget exhausted")
+			}
 		}
-		if err := renderJourney(journey, orLabel(args[0], fromLabel), orLabel(args[1], toLabel), arriveByMode, queryTime); err != nil {
+		cancelOptional()
+		if disruptionWarn != "" {
+			warnings = append(warnings, disruptionWarn)
+		}
+		if err := cmd.Context().Err(); err != nil {
 			return err
 		}
-		if disruptionWarn != "" {
-			fmt.Println("\nNote:", render.CleanText(disruptionWarn))
+		if journeyUsesConditionalService(journey) {
+			warnings = append(warnings, "journey uses conditional pickup or drop-off; contact the operator or coordinate with the driver as required")
+		}
+		for _, warning := range warnings {
+			fmt.Fprintln(os.Stderr, "warning:", render.CleanText(warning))
+		}
+		attributions := uniqueNonEmpty(source.Attribution, target.Attribution)
+		if flagJSON {
+			return printJSON(newPlanOutput(journey, attributions, warnings))
+		}
+		if err := renderJourney(journey, orLabel(args[0], source.Label), orLabel(args[1], target.Label), arriveByMode, queryTime); err != nil {
+			return err
+		}
+		if len(attributions) > 0 {
+			fmt.Printf("\nData attribution: %s\n", render.CleanText(strings.Join(attributions, "; ")))
 		}
 		return nil
 	},
@@ -174,24 +415,22 @@ func orLabel(query, label string) string {
 	return fmt.Sprintf("%s (%s)", query, label)
 }
 
-// resolvePlanStops maps a user query to a set of GTFS stop indexes that can
-// serve as journey endpoints. Resolution order: "lat,lng" coordinate, then a
-// GTFS stop-name match, then (unless geo is nil) a geocoded place whose nearest
-// stops within radiusM are used. The returned label is a human-readable place
-// name when the query was geocoded.
-func resolvePlanStops(ctx context.Context, tt *model.Timetable, query string, radiusM float64, geo *geocode.Geocoder) ([]int, string, error) {
+// resolvePlanEndpoints maps a query to weighted access/egress connectors.
+// Local stop-name matches have zero access cost; coordinates and geocoded
+// places retain distance-derived walking time and their user-visible location.
+func resolvePlanEndpoints(ctx context.Context, tt *model.Timetable, query string, radiusM float64, geo *geocode.Geocoder) (planStopResolution, error) {
 	query = strings.TrimSpace(query)
 	if lat, lon, err := parseLatLng(query); err == nil {
-		idxs := stopsWithinRadius(tt, lat, lon, radiusM)
-		if len(idxs) == 0 {
-			return nil, "", fmt.Errorf("no stops found within %.0fm of %.5f,%.5f", radiusM, lat, lon)
+		endpoints := weightedEndpointsWithinRadius(tt, lat, lon, radiusM, query)
+		if len(endpoints) == 0 {
+			return planStopResolution{}, fmt.Errorf("no stops found within %.0fm of %.5f,%.5f", radiusM, lat, lon)
 		}
-		return idxs, "", nil
+		return planStopResolution{Endpoints: endpoints}, nil
 	}
 
 	lower := strings.ToLower(query)
 	if idxs, ok := tt.NameIndex[lower]; ok {
-		return idxs, "", nil
+		return planStopResolution{Endpoints: zeroCostEndpoints(sortedUniqueStops(idxs))}, nil
 	}
 
 	var prefix, contains []int
@@ -203,38 +442,115 @@ func resolvePlanStops(ctx context.Context, tt *model.Timetable, query string, ra
 			contains = append(contains, idxs...)
 		}
 	}
+	prefix = sortedUniqueStops(prefix)
+	contains = sortedUniqueStops(contains)
 	if len(prefix) > 0 {
 		if majors := filterMajorStops(tt.Stops, prefix); len(majors) > 0 {
-			return majors, "", nil
+			return planStopResolution{Endpoints: zeroCostEndpoints(majors)}, nil
 		}
-		return prefix, "", nil
+		return planStopResolution{Endpoints: zeroCostEndpoints(prefix)}, nil
 	}
 	if len(contains) > 0 {
 		if majors := filterMajorStops(tt.Stops, contains); len(majors) > 0 {
-			return majors, "", nil
+			return planStopResolution{Endpoints: zeroCostEndpoints(majors)}, nil
 		}
-		return contains, "", nil
+		return planStopResolution{Endpoints: zeroCostEndpoints(contains)}, nil
 	}
 
 	if geo != nil {
 		place, err := geo.Lookup(ctx, query)
 		if err != nil {
-			return nil, "", fmt.Errorf("no stop matching %q and %v", query, err)
+			return planStopResolution{}, fmt.Errorf("no stop matching %q and %v", query, err)
 		}
-		idxs := stopsWithinRadius(tt, place.Lat, place.Lon, radiusM)
-		if len(idxs) == 0 {
-			return nil, "", fmt.Errorf("found %q at %.5f,%.5f but no stops within %.0fm", place.DisplayName, place.Lat, place.Lon, radiusM)
+		endpoints := weightedEndpointsWithinRadius(tt, place.Lat, place.Lon, radiusM, place.DisplayName)
+		if len(endpoints) == 0 {
+			return planStopResolution{}, fmt.Errorf("found %q at %.5f,%.5f but no stops within %.0fm", place.DisplayName, place.Lat, place.Lon, radiusM)
 		}
 		if isStreetResult(place.DisplayName) && !isStreetQuery(query) {
 			stations := stopsWithinRadius(tt, place.Lat, place.Lon, 2000)
 			if majors := filterNamedMajorStops(tt.Stops, stations, lower); len(majors) > 0 {
-				return majors, place.DisplayName, nil
+				endpoints = weightedEndpoints(tt, majors, place.Lat, place.Lon, place.DisplayName)
 			}
 		}
-		return idxs, place.DisplayName, nil
+		return planStopResolution{
+			Endpoints:   endpoints,
+			Label:       place.DisplayName,
+			Attribution: place.Attribution,
+		}, nil
 	}
 
-	return nil, "", fmt.Errorf("no stop matching %q (try a different name, a lat,lng, or drop --no-geocode)", query)
+	return planStopResolution{}, fmt.Errorf("no stop matching %q (try a different name, a lat,lng, or drop --no-geocode)", query)
+}
+
+func zeroCostEndpoints(stops []int) []model.Endpoint {
+	endpoints := make([]model.Endpoint, len(stops))
+	for i, stop := range stops {
+		endpoints[i] = model.Endpoint{Stop: stop}
+	}
+	return endpoints
+}
+
+func sortedUniqueStops(stops []int) []int {
+	if len(stops) == 0 {
+		return nil
+	}
+	result := append([]int(nil), stops...)
+	sort.Ints(result)
+	write := 1
+	for read := 1; read < len(result); read++ {
+		if result[read] == result[write-1] {
+			continue
+		}
+		result[write] = result[read]
+		write++
+	}
+	return result[:write]
+}
+
+func weightedEndpointsWithinRadius(tt *model.Timetable, lat, lon, radiusM float64, label string) []model.Endpoint {
+	return weightedEndpoints(tt, stopsWithinRadius(tt, lat, lon, radiusM), lat, lon, label)
+}
+
+func weightedEndpoints(tt *model.Timetable, stops []int, lat, lon float64, label string) []model.Endpoint {
+	location := &model.Stop{Index: -1, Name: label, Lat: lat, Lon: lon, Mode: -1}
+	endpoints := make([]model.Endpoint, 0, len(stops))
+	for _, stop := range stops {
+		if stop < 0 || stop >= len(tt.Stops) {
+			continue
+		}
+		distance := haversineM(lat, lon, tt.Stops[stop].Lat, tt.Stops[stop].Lon)
+		seconds := int(math.Ceil(distance / planWalkingSpeedMetresPerSecond))
+		endpoints = append(endpoints, model.Endpoint{Stop: stop, WalkSeconds: seconds, Location: location})
+	}
+	sort.Slice(endpoints, func(i, j int) bool {
+		if endpoints[i].WalkSeconds != endpoints[j].WalkSeconds {
+			return endpoints[i].WalkSeconds < endpoints[j].WalkSeconds
+		}
+		return endpoints[i].Stop < endpoints[j].Stop
+	})
+	return endpoints
+}
+
+func journeyUsesConditionalService(journey *model.Journey) bool {
+	for _, leg := range journey.Legs {
+		if leg.Conditional {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueNonEmpty(values ...string) []string {
+	seen := make(map[string]bool, len(values))
+	var out []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" && !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 // isRailMode returns true for feed modes that represent rail-based transport
@@ -317,7 +633,8 @@ func stopsWithinRadius(tt *model.Timetable, lat, lon, radiusM float64) []int {
 func renderJourney(j *model.Journey, from, to string, arriveBy bool, queryTime time.Time) error {
 	loc := melbourneLocation()
 	if len(j.Legs) == 0 {
-		fmt.Println("No journey found.")
+		fmt.Printf("Journey: %s → %s\n", render.CleanText(from), render.CleanText(to))
+		fmt.Printf("Already at destination at %s (0 minutes, 0 transfers).\n", j.ArrTime.In(loc).Format("Mon 15:04"))
 		return nil
 	}
 
@@ -343,17 +660,21 @@ func renderJourney(j *model.Journey, from, to string, arriveBy bool, queryTime t
 		if l.Disrupted {
 			route += " ⚠"
 		}
-		t.Row(ld, la, gtfsModeName(l.RouteType), route, l.FromStop.Name, l.ToStop.Name, dashIfEmpty(l.Headsign))
+		mode := gtfsModeName(l.RouteType)
+		if l.StayOnboard {
+			mode = "Stay onboard"
+		}
+		t.Row(ld, la, mode, route, l.FromStop.Name, l.ToStop.Name, dashIfEmpty(l.Headsign))
 	}
 	if err := t.Flush(); err != nil {
 		return err
 	}
 
-	// Show run continuation (same physical train forming multiple legs).
-	for i := 1; i < len(j.Legs); i++ {
-		if j.Legs[i-1].BlockID != "" && j.Legs[i-1].BlockID == j.Legs[i].BlockID {
-			fmt.Printf("\n  Same train continues from %s → %s\n",
-				render.CleanText(j.Legs[i-1].ToStop.Name),
+	// Show only proven in-seat continuations. Equal block strings alone are not
+	// enough evidence across feeds, service days, or explicit type-5 rules.
+	for i := range j.Legs {
+		if j.Legs[i].StayOnboard {
+			fmt.Printf("\n  Stay onboard as the service continues from %s\n",
 				render.CleanText(j.Legs[i].FromStop.Name))
 		}
 	}
@@ -426,12 +747,9 @@ func parseClockOrTime(value, dateStr string, loc *time.Location, now time.Time) 
 	return time.Time{}, fmt.Errorf("invalid time %q (want HH:MM or YYYY-MM-DD HH:MM)", value)
 }
 
-// melbourneLocation returns Australia/Melbourne, falling back to local time.
+// melbourneLocation returns the embedded Australia/Melbourne location.
 func melbourneLocation() *time.Location {
-	if loc, err := time.LoadLocation("Australia/Melbourne"); err == nil {
-		return loc
-	}
-	return time.Local
+	return localtime.Melbourne()
 }
 
 // haversineM returns the great-circle distance in metres.
@@ -472,5 +790,6 @@ func init() {
 	planCmd.Flags().BoolVar(&planNoGeocode, "no-geocode", false, "disable place/address geocoding (match local stop names only)")
 	planCmd.Flags().BoolVar(&planNoDisruptions, "no-disruptions", false, "skip the real-time disruptions overlay")
 	planCmd.Flags().BoolVar(&planNoUpdateCheck, "no-update-check", false, "skip the GTFS staleness / upstream-update check")
+	planCmd.Flags().BoolVar(&planAllowConditional, "allow-conditional", false, "allow pickup/drop-off that requires advance arrangement or driver coordination")
 	rootCmd.AddCommand(planCmd)
 }
