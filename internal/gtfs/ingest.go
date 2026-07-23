@@ -107,12 +107,14 @@ type outerFeed struct {
 }
 
 type feedCompileStats struct {
-	stops       int64
-	routes      int64
-	services    int64
-	trips       int64
-	stopTimes   int64
-	connections int64
+	stops                  int64
+	routes                 int64
+	services               int64
+	trips                  int64
+	stopTimes              int64
+	connections            int64
+	duplicateTrips         int64
+	nonIncreasingSegments  int64
 }
 
 func compileArchive(ctx context.Context, store *Store, zipPath string, progress func(string)) (ServiceCoverage, error) {
@@ -175,6 +177,12 @@ func compileArchive(ctx context.Context, store *Store, zipPath string, progress 
 		_ = os.Remove(path)
 		if compileErr != nil {
 			return ServiceCoverage{}, fmt.Errorf("feed %s: %w", feed.name, compileErr)
+		}
+		if stats.duplicateTrips > 0 {
+			progress(fmt.Sprintf("  warning: %s: skipped %d duplicate trip_id(s) in trips.txt", feed.name, stats.duplicateTrips))
+		}
+		if stats.nonIncreasingSegments > 0 {
+			progress(fmt.Sprintf("  warning: %s: skipped %d non-increasing stop-time segment(s)", feed.name, stats.nonIncreasingSegments))
 		}
 		if stats.stops == 0 || stats.routes == 0 || stats.services == 0 || stats.trips == 0 || stats.stopTimes == 0 || stats.connections == 0 {
 			return ServiceCoverage{}, fmt.Errorf("feed %s has zero core rows: %+v", feed.name, stats)

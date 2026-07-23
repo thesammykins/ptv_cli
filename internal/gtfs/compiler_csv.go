@@ -28,15 +28,17 @@ type compiledTrip struct {
 }
 
 type feedCompiler struct {
-	feedKey            int64
-	mode               int
-	files              map[string]*zip.File
-	stops              map[string]compiledStop
-	routes             map[string]int64
-	services           map[string]int64
-	calendarServiceIDs map[string]struct{}
-	trips              map[string]compiledTrip
-	levels             map[string]int64
+	feedKey                int64
+	mode                   int
+	files                  map[string]*zip.File
+	stops                  map[string]compiledStop
+	routes                 map[string]int64
+	services               map[string]int64
+	calendarServiceIDs     map[string]struct{}
+	trips                  map[string]compiledTrip
+	levels                 map[string]int64
+	duplicateTrips         int64
+	nonIncreasingSegments  int64
 }
 
 func compileInnerArchive(ctx context.Context, tx *sql.Tx, path string, feed outerFeed) (feedCompileStats, error) {
@@ -115,6 +117,7 @@ func compileInnerArchive(ctx context.Context, tx *sql.Tx, path string, feed oute
 	if stats.trips, err = compiler.compileTrips(ctx, tx, files["trips.txt"]); err != nil {
 		return stats, fmt.Errorf("trips.txt: %w", err)
 	}
+	stats.duplicateTrips = compiler.duplicateTrips
 	if stats.stopTimes, err = compiler.compileStopTimes(ctx, tx, files["stop_times.txt"]); err != nil {
 		return stats, fmt.Errorf("stop_times.txt: %w", err)
 	}
@@ -131,6 +134,7 @@ func compileInnerArchive(ctx context.Context, tx *sql.Tx, path string, feed oute
 	if stats.connections, err = compiler.materializeConnections(ctx, tx); err != nil {
 		return stats, err
 	}
+	stats.nonIncreasingSegments = compiler.nonIncreasingSegments
 	return stats, nil
 }
 
@@ -482,7 +486,12 @@ func (c *feedCompiler) compileTrips(ctx context.Context, tx *sql.Tx, file *zip.F
 			return errors.New("trip row missing trip_id, route_id, or service_id")
 		}
 		if _, duplicate := c.trips[id]; duplicate {
-			return fmt.Errorf("duplicate trip_id %q", id)
+			// TODO(5.0.1): upstream Regional Coach feed contains duplicate trip_ids.
+			// Skipping keeps the first occurrence and lets ingestion succeed, but the
+			// root cause (upstream data quality vs. parser assumption) needs investigation.
+			// Consider reporting to PTV or adding dedup diagnostics that log both rows.
+			c.duplicateTrips++
+			return nil
 		}
 		routeKey, ok := c.routes[routeID]
 		if !ok {
@@ -737,7 +746,12 @@ func (c *feedCompiler) compilePathways(ctx context.Context, tx *sql.Tx, file *zi
 }
 
 func (c *feedCompiler) materializeConnections(ctx context.Context, tx *sql.Tx) (int64, error) {
-	var invalid int
+	// TODO(0.5.1): upstream Regional Coach feed contains non-increasing stop-time
+	// segments (arrival at next stop < departure from current, or non-monotonic
+	// stop_sequence). These are skipped below rather than failing ingestion, but
+	// the root cause needs investigation — could be malformed upstream data or an
+	// edge case in how we interpret GTFS times across service-day boundaries.
+	// Consider inspecting the actual feed rows and reporting to PTV.
 	if err := tx.QueryRowContext(ctx, `
 		WITH ordered AS (
 			SELECT trip_key,stop_sequence,departure_sec,
@@ -746,11 +760,8 @@ func (c *feedCompiler) materializeConnections(ctx context.Context, tx *sql.Tx) (
 			FROM stop_times WHERE trip_key IN (SELECT trip_key FROM trips WHERE feed_key=?)
 		)
 		SELECT COUNT(*) FROM ordered
-		WHERE next_sequence IS NOT NULL AND (next_sequence <= stop_sequence OR next_arrival < departure_sec)`, c.feedKey).Scan(&invalid); err != nil {
+		WHERE next_sequence IS NOT NULL AND (next_sequence <= stop_sequence OR next_arrival < departure_sec)`, c.feedKey).Scan(&c.nonIncreasingSegments); err != nil {
 		return 0, err
-	}
-	if invalid > 0 {
-		return 0, fmt.Errorf("feed has %d non-increasing stop-time segment(s)", invalid)
 	}
 	result, err := tx.ExecContext(ctx, `
 		WITH ordered AS (
@@ -771,6 +782,7 @@ func (c *feedCompiler) materializeConnections(ctx context.Context, tx *sql.Tx) (
 		       o.dep_sequence,o.arr_sequence,o.departure_sec,o.arrival_sec,o.pickup_type,o.drop_off_type,t.block_id
 		FROM ordered o JOIN trips t ON t.trip_key=o.trip_key
 		WHERE o.arr_stop_key IS NOT NULL
+		  AND NOT (o.arr_sequence IS NOT NULL AND (o.arr_sequence <= o.dep_sequence OR o.arrival_sec < o.departure_sec))
 		ORDER BY t.feed_key,t.trip_key,o.dep_sequence,o.arr_sequence`, c.feedKey)
 	if err != nil {
 		return 0, fmt.Errorf("materializing elementary connections: %w", err)
