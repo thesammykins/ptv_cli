@@ -23,10 +23,11 @@ type AutoUpdateConfig struct {
 }
 
 type AutoUpdateResult struct {
-	Triggered  bool   `json:"triggered"`
-	Background bool   `json:"background"`
-	State      string `json:"state"`
-	Message    string `json:"message"`
+	Triggered  bool             `json:"triggered"`
+	Background bool             `json:"background"`
+	State      string           `json:"state"`
+	Message    string           `json:"message"`
+	Freshness  *FreshnessReport `json:"freshness,omitempty"`
 }
 
 // CheckAndAutoUpdate evaluates the existing freshness state and, when a
@@ -53,19 +54,23 @@ func CheckAndAutoUpdate(ctx context.Context, cfg AutoUpdateConfig) (*Store, Auto
 		return nil, AutoUpdateResult{}, err
 	}
 	if !cfg.Enabled {
-		return store, AutoUpdateResult{State: "no_update_needed"}, nil
+		report, reportErr := CheckFreshness(ctx, FreshnessRequest{DataDir: cfg.DataDir, Dataset: state, SourceURL: cfg.SourceURL, AllowNetwork: false, RequestedAt: time.Now().UTC()})
+		if reportErr != nil {
+			return store, AutoUpdateResult{State: "no_update_needed"}, nil
+		}
+		return store, AutoUpdateResult{State: "no_update_needed", Freshness: &report}, nil
 	}
 	report, checkErr := CheckFreshness(ctx, FreshnessRequest{DataDir: cfg.DataDir, Dataset: state, SourceURL: cfg.SourceURL, AllowNetwork: true, RequestedAt: time.Now().UTC()})
 	if checkErr != nil {
 		return store, AutoUpdateResult{State: "unknown", Message: "GTFS freshness check unavailable"}, nil
 	}
 	if report.State != FreshnessChanged && !(report.State == FreshnessStale && report.UpdateAvailable) {
-		return store, AutoUpdateResult{State: "current"}, nil
+		return store, AutoUpdateResult{State: "current", Freshness: &report}, nil
 	}
 	if err := startUpdateWorker(cfg); err != nil {
-		return store, AutoUpdateResult{State: "failed", Message: "GTFS background update could not be started"}, nil
+		return store, AutoUpdateResult{State: "failed", Message: "GTFS background update could not be started", Freshness: &report}, nil
 	}
-	return store, AutoUpdateResult{Triggered: true, Background: true, State: "updating", Message: "updating GTFS data in background; results may be stale until next invocation"}, nil
+	return store, AutoUpdateResult{Triggered: true, Background: true, State: "updating", Message: "updating GTFS data in background; results may be stale until next invocation", Freshness: &report}, nil
 }
 
 func startUpdateWorker(cfg AutoUpdateConfig) error {

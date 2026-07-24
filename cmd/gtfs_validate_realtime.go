@@ -53,10 +53,11 @@ var validateRealtimeCmd = &cobra.Command{
 		}
 		output := realtimeValidationOutput{Feed: feed.ID, Strategy: "feed-local trip_id + start_date -> validated namespaced static trip_id", NamespaceFormat: "{feedMode}:{source_trip_id}", MatchedTripIDs: []string{}, UnmatchedTripIDs: []string{}, Warnings: []string{}}
 		for _, update := range snapshot.TripUpdates {
+			output.TotalUpdates++
 			if update.TripID == "" || update.StartDate == "" {
 				continue
 			}
-			output.TotalUpdates++
+			output.JoinableUpdates++
 			candidates, qerr := store.ResolveTripSourceID(cmd.Context(), string(update.TripID), 2, update.StartDate)
 			if qerr != nil {
 				return qerr
@@ -70,7 +71,6 @@ var validateRealtimeCmd = &cobra.Command{
 				output.UnmatchedTripIDs = append(output.UnmatchedTripIDs, string(update.TripID))
 			}
 		}
-		output.JoinableUpdates = output.TotalUpdates
 		if output.TotalUpdates > 0 {
 			output.MatchRate = float64(output.MatchedUpdates) / float64(output.TotalUpdates)
 		}

@@ -18,11 +18,12 @@ import (
 // optional credentials are represented as empty/nil values and never prevent
 // a local GTFS command from running.
 type resolvedSources struct {
-	GTFSStore   *gtfs.Store
-	OpenDataKey string
-	V3Client    *ptvapi.Client
-	V3Static    *v3static.Snapshot
-	Runtime     *config.RuntimeConfig
+	GTFSStore     *gtfs.Store
+	GTFSFreshness *gtfs.FreshnessReport
+	OpenDataKey   string
+	V3Client      *ptvapi.Client
+	V3Static      *v3static.Snapshot
+	Runtime       *config.RuntimeConfig
 }
 
 type sourceNoticeOutput struct {
@@ -46,7 +47,7 @@ func resolveSources(ctx context.Context) (*resolvedSources, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, updateResult, err := gtfs.CheckAndAutoUpdate(ctx, gtfs.AutoUpdateConfig{Enabled: true, DataDir: runtimeCfg.DataDir, SourceURL: runtimeCfg.GTFSURL})
+	store, updateResult, err := gtfs.CheckAndAutoUpdate(ctx, gtfs.AutoUpdateConfig{Enabled: !flagNoUpdateCheck, DataDir: runtimeCfg.DataDir, SourceURL: runtimeCfg.GTFSURL})
 	if err != nil {
 		if errors.Is(err, gtfs.ErrNoCurrentGeneration) {
 			return nil, fmt.Errorf("local GTFS data is unavailable; run 'ptv gtfs update': %w", err)
@@ -56,7 +57,7 @@ func resolveSources(ctx context.Context) (*resolvedSources, error) {
 	if updateResult.Message != "" {
 		fmt.Fprintln(os.Stderr, updateResult.Message)
 	}
-	sources := &resolvedSources{GTFSStore: store, Runtime: runtimeCfg}
+	sources := &resolvedSources{GTFSStore: store, GTFSFreshness: updateResult.Freshness, Runtime: runtimeCfg}
 	if snapshot, snapshotErr := v3static.LoadEmbedded(); snapshotErr == nil {
 		sources.V3Static = snapshot
 	}
@@ -94,7 +95,7 @@ type freshnessOutput struct {
 	OpenDataRealtime *sourceFreshness `json:"opendata_realtime,omitempty"`
 }
 
-func currentGTFSFreshness(ctx context.Context, store *gtfs.Store) freshnessOutput {
+func currentGTFSFreshness(ctx context.Context, store *gtfs.Store, reports ...*gtfs.FreshnessReport) freshnessOutput {
 	if store == nil {
 		return freshnessOutput{}
 	}
@@ -106,8 +107,12 @@ func currentGTFSFreshness(ctx context.Context, store *gtfs.Store) freshnessOutpu
 	if !state.IngestedAt.IsZero() {
 		age = maxFloat(0, timeNow().Sub(state.IngestedAt).Hours())
 	}
+	stateName := "current"
+	if len(reports) > 0 && reports[0] != nil && reports[0].State != "" {
+		stateName = string(reports[0].State)
+	}
 	return freshnessOutput{GTFSStatic: &sourceFreshness{
-		State:    "current",
+		State:    stateName,
 		AgeHours: age,
 		Coverage: &struct {
 			Start string `json:"start"`
@@ -147,9 +152,9 @@ func apiToFeedModes(routeType int) []int {
 	case 2:
 		return []int{4, 6}
 	case 3:
-		return []int{1, 5}
+		return []int{1}
 	case 4:
-		return []int{4, 6}
+		return []int{5}
 	default:
 		return nil
 	}

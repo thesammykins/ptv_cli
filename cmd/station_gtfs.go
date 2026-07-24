@@ -238,9 +238,9 @@ func resolveV3StopID(ctx context.Context, store *gtfs.Store, client *ptvapi.Clie
 	return 0, false
 }
 
-func newGTFSStationOutput(ctx context.Context, store *gtfs.Store, detail *gtfs.StopDetailResult) stationOutput {
+func newGTFSStationOutput(ctx context.Context, store *gtfs.Store, detail *gtfs.StopDetailResult, reports ...*gtfs.FreshnessReport) stationOutput {
 	stop := detail.Stop
-	output := stationOutput{Disruptions: map[string]stationDisruptionOutput{}, Status: stationStatusOutput{}, TimeZone: commandTimeZone, DataSource: "gtfs_static", Freshness: freshnessPtr(currentGTFSFreshness(ctx, store)), Warnings: []string{}}
+	output := stationOutput{Disruptions: map[string]stationDisruptionOutput{}, Status: stationStatusOutput{}, TimeZone: commandTimeZone, DataSource: "gtfs_static", Freshness: freshnessPtr(currentGTFSFreshness(ctx, store, reports...)), Warnings: []string{}}
 	legacyStopID := numericSourceID(stop.StopID)
 	output.Stop = stationStopOutput{StopID: legacyStopID, PTVStopID: legacyStopID, StopName: stop.StopName, StopLatitude: &stop.StopLat, StopLongitude: &stop.StopLon, RouteType: feedToAPIType(stop.FeedMode), Routes: make([]stationRouteOutput, 0, len(detail.Routes)), GTFSStopID: stop.StopID, ParentStation: stop.ParentStation, LocationType: stop.LocationType, WheelchairBoarding: stop.WheelchairBoarding, Transfers: detail.Transfers, Pathways: detail.Pathways}
 	for _, route := range detail.Routes {

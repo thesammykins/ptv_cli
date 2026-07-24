@@ -35,15 +35,15 @@ func resolveGTFSRoute(ctx context.Context, store *gtfs.Store, query string, mode
 	return matches[0], nil
 }
 
-func newGTFSLinesListOutput(ctx context.Context, store *gtfs.Store, routes []gtfs.RouteResult) linesListOutput {
-	output := linesListOutput{Routes: make([]lineRouteOutput, 0, len(routes)), Status: lineStatusOutput{}, DataSource: "gtfs_static", Freshness: freshnessPtr(currentGTFSFreshness(ctx, store)), Warnings: []string{}}
+func newGTFSLinesListOutput(ctx context.Context, store *gtfs.Store, routes []gtfs.RouteResult, reports ...*gtfs.FreshnessReport) linesListOutput {
+	output := linesListOutput{Routes: make([]lineRouteOutput, 0, len(routes)), Status: lineStatusOutput{}, DataSource: "gtfs_static", Freshness: freshnessPtr(currentGTFSFreshness(ctx, store, reports...)), Warnings: []string{}}
 	for _, route := range routes {
 		output.Routes = append(output.Routes, lineRouteOutput{RouteName: route.LongName, RouteNumber: route.ShortName, RouteGTFSID: route.RouteID, GTFSRouteID: route.RouteID, RouteType: feedToAPIType(route.FeedMode), Mode: gtfsModeName(route.FeedMode)})
 	}
 	return output
 }
 
-func runLineShowGTFS(ctx context.Context, store *gtfs.Store, query string, modes []int) error {
+func runLineShowGTFS(ctx context.Context, store *gtfs.Store, query string, modes []int, reports ...*gtfs.FreshnessReport) error {
 	route, err := resolveGTFSRoute(ctx, store, query, modes)
 	if err != nil {
 		return err
@@ -52,7 +52,7 @@ func runLineShowGTFS(ctx context.Context, store *gtfs.Store, query string, modes
 	if err != nil {
 		return err
 	}
-	output := linesShowOutput{Route: lineRouteOutput{RouteName: route.LongName, RouteNumber: route.ShortName, RouteGTFSID: route.RouteID, GTFSRouteID: route.RouteID, RouteType: feedToAPIType(route.FeedMode), Mode: gtfsModeName(route.FeedMode)}, Directions: []lineDirectionOutput{}, Stops: map[string][]lineStopOutput{}, DataSource: "gtfs_static", Freshness: freshnessPtr(currentGTFSFreshness(ctx, store)), Warnings: []string{}}
+	output := linesShowOutput{Route: lineRouteOutput{RouteName: route.LongName, RouteNumber: route.ShortName, RouteGTFSID: route.RouteID, GTFSRouteID: route.RouteID, RouteType: feedToAPIType(route.FeedMode), Mode: gtfsModeName(route.FeedMode)}, Directions: []lineDirectionOutput{}, Stops: map[string][]lineStopOutput{}, DataSource: "gtfs_static", Freshness: freshnessPtr(currentGTFSFreshness(ctx, store, reports...)), Warnings: []string{}}
 	for _, direction := range detail.Directions {
 		output.Directions = append(output.Directions, lineDirectionOutput{DirectionID: direction.DirectionID, DirectionName: direction.Headsign, RouteDirectionDescription: direction.Description, RouteType: feedToAPIType(route.FeedMode)})
 		stops := detail.Stops[direction.DirectionID]

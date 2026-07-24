@@ -64,7 +64,7 @@ var timetableCmd = &cobra.Command{
 			return err
 		}
 		anchor := localtime.ServiceDayAnchor(date)
-		output := timetableOutput{Departures: make([]timetableDepartureOutput, 0, len(departures)), ServiceDate: date.Format("20060102"), DataSource: "gtfs_static", Freshness: currentGTFSFreshness(cmd.Context(), sources.GTFSStore), Warnings: []string{}}
+		output := timetableOutput{Departures: make([]timetableDepartureOutput, 0, len(departures)), ServiceDate: date.Format("20060102"), DataSource: "gtfs_static", Freshness: currentGTFSFreshness(cmd.Context(), sources.GTFSStore, sources.GTFSFreshness), Warnings: []string{}}
 		for _, departure := range departures {
 			output.Departures = append(output.Departures, timetableDepartureOutput{DepartureResult: departure, DepartureTime: anchor.Add(time.Duration(departure.DepartureSec) * time.Second).Format(time.RFC3339), ArrivalTime: anchor.Add(time.Duration(departure.ArrivalSec) * time.Second).Format(time.RFC3339)})
 		}

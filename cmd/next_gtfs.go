@@ -42,7 +42,7 @@ func runNextGTFS(ctx context.Context, sources *resolvedSources, query string, mo
 	if flagLimit > 0 && len(filtered) > flagLimit {
 		filtered = filtered[:flagLimit]
 	}
-	output := nextOutput{Departures: []nextDepartureOutput{}, Stops: map[string]nextStopOutput{}, Routes: map[string]nextRouteOutput{}, Runs: map[string]nextRunOutput{}, Directions: map[string]nextDirectionOutput{}, Disruptions: map[string]disruptionOutput{}, Status: nextStatusOutput{}, TimeZone: commandTimeZone, DataSource: "gtfs_static", Freshness: freshnessPtr(currentGTFSFreshness(ctx, sources.GTFSStore)), Warnings: []string{}}
+	output := nextOutput{Departures: []nextDepartureOutput{}, Stops: map[string]nextStopOutput{}, Routes: map[string]nextRouteOutput{}, Runs: map[string]nextRunOutput{}, Directions: map[string]nextDirectionOutput{}, Disruptions: map[string]disruptionOutput{}, Status: nextStatusOutput{}, TimeZone: commandTimeZone, DataSource: "gtfs_static", Freshness: freshnessPtr(currentGTFSFreshness(ctx, sources.GTFSStore, sources.GTFSFreshness)), Warnings: []string{}}
 	output.Stops[stop.StopID] = nextStopOutput{StopName: stop.StopName, StopLatitude: stop.StopLat, StopLongitude: stop.StopLon, RouteType: feedToAPIType(stop.FeedMode), GTFSStopID: stop.StopID}
 	cache := gtfsrt.NewInvocationCache()
 	var snapshot *gtfsrt.Snapshot

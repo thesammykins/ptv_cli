@@ -66,7 +66,7 @@ var stationCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		output := newGTFSStationOutput(commandCtx, sources.GTFSStore, detail)
+		output := newGTFSStationOutput(commandCtx, sources.GTFSStore, detail, sources.GTFSFreshness)
 		mergeStationFacilitiesFromV3(commandCtx, sources, joinArgs(args), modeHint, stop, &output)
 		if flagJSON {
 			return printJSON(&output)

@@ -13,7 +13,7 @@ import (
 )
 
 func runDisruptionsGTFS(ctx context.Context, sources *resolvedSources, routeTypes []int, routeQuery string) error {
-	output := disruptionsOutput{Disruptions: map[string][]disruptionOutput{}, Status: disruptionStatusOutput{}, TimeZone: commandTimeZone, DataSource: "opendata_alerts", Freshness: freshnessPtr(currentGTFSFreshness(ctx, sources.GTFSStore)), Warnings: []string{}}
+	output := disruptionsOutput{Disruptions: map[string][]disruptionOutput{}, Status: disruptionStatusOutput{}, TimeZone: commandTimeZone, DataSource: "opendata_alerts", Freshness: freshnessPtr(currentGTFSFreshness(ctx, sources.GTFSStore, sources.GTFSFreshness)), Warnings: []string{}}
 	if sources.OpenDataKey == "" {
 		output.Warnings = append(output.Warnings, "Open Data service alerts unavailable; run 'ptv auth opendata login'; an empty result does not prove that no disruptions exist")
 		if flagJSON {
@@ -41,7 +41,7 @@ func runDisruptionsGTFS(ctx context.Context, sources *resolvedSources, routeType
 			output.Warnings = append(output.Warnings, fmt.Sprintf("%s alerts unavailable: %s", routeTypeName(routeType), err))
 			continue
 		}
-		output.Freshness.OpenDataRealtime = sourceFreshnessFromSnapshot(snapshot)
+		output.Freshness.OpenDataRealtime = worseSourceFreshness(output.Freshness.OpenDataRealtime, sourceFreshnessFromSnapshot(snapshot))
 		for _, alert := range snapshot.AllAlerts() {
 			if routeQuery != "" && !alertMatchesQuery(alert, routeQuery) {
 				continue
@@ -70,7 +70,7 @@ func runDisruptionsGTFS(ctx context.Context, sources *resolvedSources, routeType
 		fmt.Printf("\n%s\n", render.CleanText(mode))
 		table := render.NewTable("STATUS", "TITLE")
 		for _, item := range items {
-			table.Row(item.Effect, item.Title)
+			table.Row(item.DisruptionStatus, item.Title)
 		}
 		if err := table.Flush(); err != nil {
 			return err

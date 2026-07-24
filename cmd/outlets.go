@@ -17,10 +17,8 @@ var outletsCmd = &cobra.Command{
 	Short: "List or search myki ticket outlets",
 	Args:  cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		staticSnapshot, err := v3static.LoadEmbedded()
-		if err != nil {
-			return err
-		}
+		var staticSnapshot *v3static.Snapshot
+		var staticErr error
 		var client *ptvapi.Client
 		if runtimeConfig, runtimeErr := loadRuntimeConfig(); runtimeErr == nil {
 			if credentials, credentialErr := config.LoadPTVCredentialsWithOptions(config.LoadOptions{EnvFile: flagEnv}); credentialErr == nil {
@@ -53,6 +51,10 @@ var outletsCmd = &cobra.Command{
 			}
 		}
 		if dataSource == "v3_static_snapshot" {
+			staticSnapshot, staticErr = v3static.LoadEmbedded()
+			if staticErr != nil {
+				return staticErr
+			}
 			if len(args) > 0 {
 				for _, outlet := range staticSnapshot.SearchOutlets(joinArgs(args), 0) {
 					outlets = append(outlets, ptvapi.ResultOutlet{OutletName: outlet.OutletName, OutletBusiness: outlet.OutletBusiness, OutletLatitude: outlet.OutletLatitude, OutletLongitude: outlet.OutletLongitude, OutletSuburb: outlet.OutletSuburb})

@@ -207,7 +207,10 @@ func normalizeAlert(entity *gtfs.FeedEntity, feedFreshness TimestampFreshness, f
 		}
 		result.InformedEntities = append(result.InformedEntities, item)
 	}
-	if len(result.ActivePeriods) > 0 {
+	if len(result.ActivePeriods) == 0 {
+		// GTFS-Realtime defines an alert without active_period as always active.
+		result.Freshness.Entity = TimestampFreshness{State: FreshnessCurrent}
+	} else {
 		now := fetchedAt
 		for _, period := range result.ActivePeriods {
 			if (period.Start == nil || !now.Before(*period.Start)) && (period.End == nil || now.Before(*period.End)) {

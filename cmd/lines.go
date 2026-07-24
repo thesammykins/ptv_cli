@@ -29,7 +29,7 @@ var linesCmd = &cobra.Command{
 			return err
 		}
 		if len(args) > 0 {
-			return runLineShowGTFS(cmd.Context(), sources.GTFSStore, joinArgs(args), gtfsFeedModes(routeTypes))
+			return runLineShowGTFS(cmd.Context(), sources.GTFSStore, joinArgs(args), gtfsFeedModes(routeTypes), sources.GTFSFreshness)
 		}
 		routes, err := sources.GTFSStore.RoutesByMode(cmd.Context(), gtfsFeedModes(routeTypes))
 		if err != nil {
@@ -38,7 +38,7 @@ var linesCmd = &cobra.Command{
 		if flagLimit > 0 && len(routes) > flagLimit {
 			routes = routes[:flagLimit]
 		}
-		output := newGTFSLinesListOutput(cmd.Context(), sources.GTFSStore, routes)
+		output := newGTFSLinesListOutput(cmd.Context(), sources.GTFSStore, routes, sources.GTFSFreshness)
 		if flagJSON {
 			return printJSON(output)
 		}
@@ -68,7 +68,7 @@ var linesShowCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return runLineShowGTFS(cmd.Context(), sources.GTFSStore, joinArgs(args), gtfsFeedModes(routeTypes))
+		return runLineShowGTFS(cmd.Context(), sources.GTFSStore, joinArgs(args), gtfsFeedModes(routeTypes), sources.GTFSFreshness)
 	},
 }
 

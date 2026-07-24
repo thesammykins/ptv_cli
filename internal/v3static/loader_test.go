@@ -42,6 +42,14 @@ func TestFindStationRequiresUniqueModeScopedMatch(t *testing.T) {
 	if _, ok := snapshot.FindStation("Central", nil); ok {
 		t.Fatal("unscoped ambiguous station matched")
 	}
+	mixed := &Snapshot{StationFacilities: []StationFacility{
+		{RouteType: 0, PTVStopID: 1, StopName: "Central"},
+		{RouteType: 0, PTVStopID: 2, StopName: "Central"},
+		{RouteType: 0, PTVStopID: 3, StopName: "Central Station"},
+	}}
+	if _, ok := mixed.FindStation("Central", []int{0}); ok {
+		t.Fatal("ambiguous exact station fell back to fuzzy match")
+	}
 	if station, ok := snapshot.FindStation("Central", []int{0}); !ok || station.PTVStopID != 1 {
 		t.Fatalf("train station = %+v, ok=%v", station, ok)
 	}

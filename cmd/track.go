@@ -62,7 +62,7 @@ var trackCmd = &cobra.Command{Use: "track <trip-id>", Short: "Track a scheduled 
 	if err != nil {
 		return err
 	}
-	output := trackOutput{Trip: trip, Realtime: trackRealtimeOutput{State: "unknown", MatchStrategy: realtimeJoinStrategy}, Stops: []trackStopOutput{}, ServiceDate: date.Format("20060102"), DataSource: "gtfs_static", Freshness: currentGTFSFreshness(cmd.Context(), sources.GTFSStore), Warnings: []string{}}
+	output := trackOutput{Trip: trip, Realtime: trackRealtimeOutput{State: "unknown", MatchStrategy: realtimeJoinStrategy}, Stops: []trackStopOutput{}, ServiceDate: date.Format("20060102"), DataSource: "gtfs_static", Freshness: currentGTFSFreshness(cmd.Context(), sources.GTFSStore, sources.GTFSFreshness), Warnings: []string{}}
 	anchor := localtime.ServiceDayAnchor(date)
 	var snapshot *gtfsrt.Snapshot
 	cache := gtfsrt.NewInvocationCache()
@@ -75,7 +75,7 @@ var trackCmd = &cobra.Command{Use: "track <trip-id>", Short: "Track a scheduled 
 				fmt.Fprintln(os.Stderr, output.Warnings[len(output.Warnings)-1])
 			} else {
 				output.DataSource = "gtfs_static+opendata_realtime"
-				output.Freshness.OpenDataRealtime = sourceFreshnessFromSnapshot(snapshot)
+				output.Freshness.OpenDataRealtime = worseSourceFreshness(output.Freshness.OpenDataRealtime, sourceFreshnessFromSnapshot(snapshot))
 			}
 		}
 	} else {
@@ -128,7 +128,7 @@ var trackCmd = &cobra.Command{Use: "track <trip-id>", Short: "Track a scheduled 
 			if output.Vehicle == nil {
 				if vehicleFeed, feedOK := realtimeVehicleFeedForMode(trip.FeedMode); feedOK {
 					if vehicleSnapshot, vehicleErr := cache.GetOrFetch(cmd.Context(), client, vehicleFeed); vehicleErr == nil {
-						output.Freshness.OpenDataRealtime = sourceFreshnessFromSnapshot(vehicleSnapshot)
+						output.Freshness.OpenDataRealtime = worseSourceFreshness(output.Freshness.OpenDataRealtime, sourceFreshnessFromSnapshot(vehicleSnapshot))
 						for _, vehicle := range vehicleSnapshot.Vehicles {
 							if vehicle.TripID != gtfsrt.StaticTripID(sourceTrip) || vehicle.StartDate != output.ServiceDate {
 								continue

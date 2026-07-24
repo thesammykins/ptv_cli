@@ -52,3 +52,19 @@ func TestNormalizeTripUpdatesAndAlertsPreservesNamespacesAndFreshness(t *testing
 		t.Fatalf("alert indexes = %+v", snapshot.Alerts)
 	}
 }
+
+func TestNormalizeAlertWithoutActivePeriodIsAlwaysActive(t *testing.T) {
+	now := time.Date(2026, 7, 24, 2, 0, 0, 0, time.UTC)
+	feedTimestamp := uint64(now.Unix())
+	message := &gtfs.FeedMessage{
+		Header: &gtfs.FeedHeader{GtfsRealtimeVersion: proto.String("2.0"), Timestamp: &feedTimestamp},
+		Entity: []*gtfs.FeedEntity{{
+			Id:    proto.String("always-active"),
+			Alert: &gtfs.Alert{Effect: gtfs.Alert_NO_SERVICE.Enum()},
+		}},
+	}
+	snapshot := NormalizeSnapshot(testFeed(), message, now)
+	if len(snapshot.Alerts) != 1 || snapshot.Alerts[0].Freshness.Entity.State != FreshnessCurrent || snapshot.Alerts[0].Freshness.Overall != FreshnessCurrent {
+		t.Fatalf("alert freshness = %+v, want current entity and overall", snapshot.Alerts)
+	}
+}

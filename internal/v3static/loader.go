@@ -96,6 +96,9 @@ func (s *Snapshot) FindStation(query string, routeTypes []int) (StationFacility,
 	if exactCount == 1 {
 		return exact, true
 	}
+	if exactCount > 1 {
+		return StationFacility{}, false
+	}
 	return fuzzy, fuzzyCount == 1
 }
 

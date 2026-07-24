@@ -47,7 +47,7 @@ var searchCmd = &cobra.Command{
 				filtered = append(filtered, route)
 			}
 		}
-		output := newGTFSsearchOutput(cmd.Context(), sources.GTFSStore, stops, filtered)
+		output := newGTFSsearchOutput(cmd.Context(), sources.GTFSStore, stops, filtered, sources.GTFSFreshness)
 		if sources.V3Client != nil {
 			if enrichment, enrichmentErr := sources.V3Client.Search(cmd.Context(), term, routeTypes); enrichmentErr == nil {
 				for _, outlet := range enrichment.Outlets {
@@ -158,8 +158,8 @@ type searchRouteOutput struct {
 	Mode        string `json:"mode,omitempty"`
 }
 
-func newGTFSsearchOutput(ctx context.Context, store *gtfs.Store, stops []gtfs.StopResult, routes []gtfs.RouteResult) searchOutput {
-	freshness := currentGTFSFreshness(ctx, store)
+func newGTFSsearchOutput(ctx context.Context, store *gtfs.Store, stops []gtfs.StopResult, routes []gtfs.RouteResult, reports ...*gtfs.FreshnessReport) searchOutput {
+	freshness := currentGTFSFreshness(ctx, store, reports...)
 	output := searchOutput{
 		Stops: make([]searchStopOutput, 0, len(stops)), Routes: make([]searchRouteOutput, 0, len(routes)), Outlets: []searchOutletOutput{},
 		DataSource: "gtfs_static", Freshness: &freshness, Warnings: []string{},

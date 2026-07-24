@@ -37,7 +37,7 @@ var tripCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		output := tripOutput{Trip: trip, ServiceDate: date.Format("20060102"), DataSource: "gtfs_static", Freshness: currentGTFSFreshness(cmd.Context(), sources.GTFSStore), Warnings: []string{}}
+		output := tripOutput{Trip: trip, ServiceDate: date.Format("20060102"), DataSource: "gtfs_static", Freshness: currentGTFSFreshness(cmd.Context(), sources.GTFSStore, sources.GTFSFreshness), Warnings: []string{}}
 		if flagJSON {
 			return printJSON(output)
 		}

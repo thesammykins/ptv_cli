@@ -69,7 +69,7 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 		if err != nil {
 			return err
 		}
-		output := newGTFSStopsOutput(cmd.Context(), sources.GTFSStore, nearby, attribution)
+		output := newGTFSStopsOutput(cmd.Context(), sources.GTFSStore, nearby, attribution, sources.GTFSFreshness)
 		if flagJSON {
 			return printJSON(output)
 		}
@@ -120,7 +120,7 @@ var stopsOnCmd = &cobra.Command{
 				out[i] = gtfs.NearbyStopResult{StopResult: stop}
 			}
 			return out
-		}(), "")
+		}(), "", sources.GTFSFreshness)
 		if flagJSON {
 			return printJSON(output)
 		}

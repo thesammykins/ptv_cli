@@ -237,6 +237,9 @@ func (s *Store) stopByID(ctx context.Context, query string, feedModes []int) (St
 				key    int64
 			}{r, key})
 		}
+		if err := rows.Err(); err != nil {
+			return StopResult{}, 0, err
+		}
 	}
 	if len(found) == 0 {
 		return StopResult{}, 0, fmt.Errorf("%w: stop %q", ErrNotFound, query)
@@ -443,6 +446,9 @@ func (s *Store) routeByID(ctx context.Context, query string, feedModes []int) (R
 			key int64
 		}{r, key})
 	}
+	if err := rows.Err(); err != nil {
+		return RouteResult{}, 0, err
+	}
 	if len(found) == 0 && !strings.Contains(query, ":") {
 		rows, err = s.db.QueryContext(ctx, `SELECT r.route_id,coalesce(r.route_short_name,''),coalesce(r.route_long_name,''),r.feed_mode,coalesce(r.route_type,0),r.route_key FROM routes r WHERE r.source_route_id=?`+where, append([]any{query}, args...)...)
 		if err != nil {
@@ -459,6 +465,9 @@ func (s *Store) routeByID(ctx context.Context, query string, feedModes []int) (R
 				r   RouteResult
 				key int64
 			}{r, key})
+		}
+		if err := rows.Err(); err != nil {
+			return RouteResult{}, 0, err
 		}
 	}
 	if len(found) == 0 && !strings.Contains(query, ":") {
@@ -477,6 +486,9 @@ func (s *Store) routeByID(ctx context.Context, query string, feedModes []int) (R
 				r   RouteResult
 				key int64
 			}{r, key})
+		}
+		if err := rows.Err(); err != nil {
+			return RouteResult{}, 0, err
 		}
 	}
 	if len(found) == 0 {
@@ -685,6 +697,7 @@ func (s *Store) TripDetail(ctx context.Context, tripID string, date time.Time) (
 		key    int64
 	}
 	count := 0
+	var candidates []string
 	for rows.Next() {
 		var r TripDetailResult
 		var key int64
@@ -695,6 +708,7 @@ func (s *Store) TripDetail(ctx context.Context, tripID string, date time.Time) (
 			result TripDetailResult
 			key    int64
 		}{r, key}
+		candidates = append(candidates, r.TripID)
 		count++
 	}
 	if err := rows.Err(); err != nil {
@@ -704,7 +718,7 @@ func (s *Store) TripDetail(ctx context.Context, tripID string, date time.Time) (
 		return nil, fmt.Errorf("%w: trip %q", ErrNotFound, tripID)
 	}
 	if count > 1 {
-		return nil, fmt.Errorf("%w: trip %q", &AmbiguousIDError{Kind: "trip", Query: tripID}, tripID)
+		return nil, &AmbiguousIDError{Kind: "trip", Query: tripID, Candidates: candidates}
 	}
 	rows, err = s.db.QueryContext(ctx, `SELECT s.stop_id,coalesce(s.stop_name,''),coalesce(s.stop_lat,0),coalesce(s.stop_lon,0),st.stop_sequence,st.arrival_sec,st.departure_sec,st.pickup_type,st.drop_off_type FROM stop_times st JOIN stops s ON s.stop_key=st.stop_key WHERE st.trip_key=? ORDER BY st.stop_sequence`, found.key)
 	if err != nil {
@@ -771,6 +785,9 @@ func (s *Store) StopDetail(ctx context.Context, stopID string) (*StopDetailResul
 			}
 			keys = append(keys, child)
 		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 	}
 	keyArgs := make([]any, len(keys))
 	for i, k := range keys {
@@ -789,6 +806,9 @@ func (s *Store) StopDetail(ctx context.Context, stopID string) (*StopDetailResul
 		}
 		result.Routes = append(result.Routes, r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	rows, err = s.db.QueryContext(ctx, `SELECT from_stop_id,to_stop_id,coalesce(transfer_type,0),coalesce(min_transfer_time,0),source FROM transfers WHERE from_stop_key IN (`+in+`) OR to_stop_key IN (`+in+`) ORDER BY transfer_key`, append(keyArgs, keyArgs...)...)
 	if err != nil {
 		return nil, err
@@ -800,6 +820,9 @@ func (s *Store) StopDetail(ctx context.Context, stopID string) (*StopDetailResul
 			return nil, err
 		}
 		result.Transfers = append(result.Transfers, tr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	rows, err = s.db.QueryContext(ctx, `SELECT pathway_id,from_stop_id,to_stop_id,pathway_mode,is_bidirectional,length,traversal_time,signposted_as,reversed_signposted_as FROM pathways WHERE from_stop_key IN (`+in+`) OR to_stop_key IN (`+in+`) ORDER BY pathway_key`, append(keyArgs, keyArgs...)...)
 	if err != nil {
@@ -827,6 +850,9 @@ func (s *Store) StopDetail(ctx context.Context, stopID string) (*StopDetailResul
 		p.SignpostedAs = sign.String
 		p.ReversedSignpostedAs = reversed.String
 		result.Pathways = append(result.Pathways, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return result, nil
 }

@@ -62,6 +62,31 @@ func sourceFreshnessFromSnapshot(snapshot *gtfsrt.Snapshot) *sourceFreshness {
 	return result
 }
 
+func worseSourceFreshness(current, candidate *sourceFreshness) *sourceFreshness {
+	if current == nil {
+		return candidate
+	}
+	if candidate == nil {
+		return current
+	}
+	rank := func(state string) int {
+		switch state {
+		case "changed", "stale":
+			return 3
+		case "unknown":
+			return 2
+		case "future":
+			return 1
+		default:
+			return 0
+		}
+	}
+	if rank(candidate.State) > rank(current.State) || (rank(candidate.State) == rank(current.State) && candidate.AgeSeconds > current.AgeSeconds) {
+		return candidate
+	}
+	return current
+}
+
 func realtimeWarning(err error) string {
 	if err == nil {
 		return "real-time data unavailable; showing scheduled times only"
