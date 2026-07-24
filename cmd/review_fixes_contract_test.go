@@ -35,6 +35,14 @@ func TestFilterNextGTFSDeparturesIncludesPreviousServiceDateAfterMidnight(t *tes
 	}
 }
 
+func TestNextServiceDatesIncludePreviousCurrentAndTomorrow(t *testing.T) {
+	date := time.Date(2026, 7, 24, 0, 0, 0, 0, localtime.Melbourne())
+	dates := nextServiceDates(date)
+	if len(dates) != 3 || !dates[0].Equal(date.AddDate(0, 0, -1)) || !dates[1].Equal(date) || !dates[2].Equal(date.AddDate(0, 0, 1)) {
+		t.Fatalf("service dates = %v, want previous/current/tomorrow", dates)
+	}
+}
+
 func TestWorseSourceFreshnessPreservesOldestRealtimeEvidence(t *testing.T) {
 	current := &sourceFreshness{State: "current", AgeSeconds: 5}
 	stale := &sourceFreshness{State: "stale", AgeSeconds: 120}

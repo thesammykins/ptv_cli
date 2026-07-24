@@ -23,6 +23,17 @@ func TestNextDepartureMatchesByTimeAndRouteWithoutReplacingGTFSIdentity(t *testi
 	}
 }
 
+func TestUniqueNextDepartureMatchRejectsAmbiguousStaticCandidates(t *testing.T) {
+	when := "2026-07-24T03:44:00Z"
+	departures := []nextDepartureOutput{
+		{ScheduledDepartureUTC: &when, RouteLabel: "109"},
+		{ScheduledDepartureUTC: &when, RouteLabel: "109"},
+	}
+	if index, ok := uniqueNextDepartureMatch(departures, nextDepartureOutput{ScheduledDepartureUTC: &when, RouteLabel: "109"}); ok || index != -1 {
+		t.Fatalf("ambiguous match = (%d, %v), want (-1, false)", index, ok)
+	}
+}
+
 func TestApplyTripUpdateContinuesPastNonMatchingStop(t *testing.T) {
 	now := time.Date(2026, 7, 24, 3, 0, 0, 0, time.UTC)
 	tripID, startDate := "trip-1", "20260724"
@@ -46,6 +57,29 @@ func TestApplyTripUpdateContinuesPastNonMatchingStop(t *testing.T) {
 	applyTripUpdate(&item, departure, snapshot, now)
 	if item.EstimatedDepartureUTC == nil || *item.EstimatedDepartureUTC != now.Add(3*time.Minute).Format(time.RFC3339) {
 		t.Fatalf("estimated departure = %v, want later matching stop update", item.EstimatedDepartureUTC)
+	}
+}
+
+func TestApplyTripUpdateRequiresMatchingSequenceAndStopID(t *testing.T) {
+	now := time.Date(2026, 7, 24, 3, 0, 0, 0, time.UTC)
+	tripID, startDate := "trip-1", "20260724"
+	sequence := uint32(2)
+	stopID := "wrong-stop"
+	estimated := now.Add(3 * time.Minute).Unix()
+	relationship := realtimegtfs.TripDescriptor_SCHEDULED
+	snapshot := gtfsrt.NormalizeSnapshot(gtfsrt.Feed{ID: "test-trip-updates", Kind: gtfsrt.FeedKindTripUpdates}, &realtimegtfs.FeedMessage{Entity: []*realtimegtfs.FeedEntity{{
+		Id: proto.String("entity-1"),
+		TripUpdate: &realtimegtfs.TripUpdate{
+			Trip:           &realtimegtfs.TripDescriptor{TripId: &tripID, StartDate: &startDate, ScheduleRelationship: &relationship},
+			StopTimeUpdate: []*realtimegtfs.TripUpdate_StopTimeUpdate{{StopSequence: &sequence, StopId: &stopID, Departure: &realtimegtfs.TripUpdate_StopTimeEvent{Time: &estimated}}},
+		},
+	}}}, now)
+
+	item := nextDepartureOutput{}
+	departure := gtfsdata.DepartureResult{TripID: "2:" + tripID, StopID: "2:actual-stop", StopSequence: 2, ServiceDate: startDate}
+	applyTripUpdate(&item, departure, snapshot, now)
+	if item.EstimatedDepartureUTC != nil {
+		t.Fatalf("estimated departure = %v, want no update for mismatched stop ID", item.EstimatedDepartureUTC)
 	}
 }
 

@@ -228,6 +228,22 @@ func TestGTFSsearchOutputPreservesNormalizedCollections(t *testing.T) {
 	}
 }
 
+func TestLimitGTFSsearchOutputCapsCombinedCollections(t *testing.T) {
+	previousLimit := flagLimit
+	t.Cleanup(func() { flagLimit = previousLimit })
+	flagLimit = 3
+	output := searchOutput{
+		Stops:   []searchStopOutput{{}, {}},
+		Routes:  []searchRouteOutput{{}, {}},
+		Outlets: []searchOutletOutput{{}, {}},
+	}
+
+	limitGTFSsearchOutput(&output)
+	if len(output.Stops) != 2 || len(output.Routes) != 1 || len(output.Outlets) != 0 {
+		t.Fatalf("limited search output = stops:%d routes:%d outlets:%d, want 2/1/0", len(output.Stops), len(output.Routes), len(output.Outlets))
+	}
+}
+
 func TestSearchCommandPropagatesCommandContext(t *testing.T) {
 	t.Setenv("PTV_API_KEY", "contract-test-key")
 	t.Setenv("PTV_API_USERID", "123")

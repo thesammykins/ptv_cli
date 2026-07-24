@@ -38,7 +38,7 @@ func runNextGTFS(ctx context.Context, sources *resolvedSources, query string, mo
 		}
 		routeID = route.RouteID
 	}
-	serviceDates := []time.Time{date.AddDate(0, 0, -1), date}
+	serviceDates := nextServiceDates(date)
 	anchors := make(map[string]time.Time, len(serviceDates))
 	var departures []gtfs.DepartureResult
 	for _, serviceDate := range serviceDates {
@@ -191,26 +191,28 @@ func mergeNextPlatformsFromV3(ctx context.Context, sources *resolvedSources, que
 	v3Output := newNextOutput(response)
 	matched := 0
 	for _, v3Departure := range v3Output.Departures {
-		for index := range output.Departures {
-			if !nextDepartureMatches(output.Departures[index], v3Departure) {
-				continue
-			}
-			output.Departures[index].PTVStopID = v3Departure.PTVStopID
-			output.Departures[index].PTVRouteID = v3Departure.PTVRouteID
-			output.Departures[index].PTVRunRef = v3Departure.PTVRunRef
-			output.Departures[index].RunRef = v3Departure.RunRef
-			output.Departures[index].PlatformNumber = v3Departure.PlatformNumber
-			output.Departures[index].AtPlatform = v3Departure.AtPlatform
-			output.Departures[index].PTVDisruptionIDs = v3Departure.PTVDisruptionIDs
-			output.Departures[index].DisruptionIDs = v3Departure.DisruptionIDs
-			matched++
-			break
+		index, ok := uniqueNextDepartureMatch(output.Departures, v3Departure)
+		if !ok {
+			continue
 		}
+		output.Departures[index].PTVStopID = v3Departure.PTVStopID
+		output.Departures[index].PTVRouteID = v3Departure.PTVRouteID
+		output.Departures[index].PTVRunRef = v3Departure.PTVRunRef
+		output.Departures[index].RunRef = v3Departure.RunRef
+		output.Departures[index].PlatformNumber = v3Departure.PlatformNumber
+		output.Departures[index].AtPlatform = v3Departure.AtPlatform
+		output.Departures[index].PTVDisruptionIDs = v3Departure.PTVDisruptionIDs
+		output.Departures[index].DisruptionIDs = v3Departure.DisruptionIDs
+		matched++
 	}
 	if matched > 0 {
 		output.DataSource = "gtfs_static+opendata_realtime+v3_platforms"
 		fmt.Fprintln(os.Stderr, "platform numbers enriched from PTV API")
 	}
+}
+
+func nextServiceDates(date time.Time) []time.Time {
+	return []time.Time{date.AddDate(0, 0, -1), date, date.AddDate(0, 0, 1)}
 }
 
 func filterNextPlatform(departures []nextDepartureOutput, platform string) []nextDepartureOutput {
@@ -239,6 +241,20 @@ func nextDepartureMatches(primary, enrichment nextDepartureOutput) bool {
 	return mergeKey(primary.RouteLabel, "") == mergeKey(enrichment.RouteLabel, "")
 }
 
+func uniqueNextDepartureMatch(departures []nextDepartureOutput, enrichment nextDepartureOutput) (int, bool) {
+	matchedIndex := -1
+	for index := range departures {
+		if !nextDepartureMatches(departures[index], enrichment) {
+			continue
+		}
+		if matchedIndex >= 0 {
+			return -1, false
+		}
+		matchedIndex = index
+	}
+	return matchedIndex, matchedIndex >= 0
+}
+
 func maxInt(left, right int) int {
 	if left > right {
 		return left
@@ -261,16 +277,15 @@ func applyTripUpdate(item *nextDepartureOutput, departure gtfs.DepartureResult, 
 		item.ScheduleRelationship = "SCHEDULED"
 	}
 	for _, stopUpdate := range update.StopTimeUpdates {
-		sequenceMatch := stopUpdate.StopSequence != nil && int(*stopUpdate.StopSequence) == departure.StopSequence
-		stopMatch := false
+		sequencePresent := stopUpdate.StopSequence != nil
+		sequenceMatch := !sequencePresent || int(*stopUpdate.StopSequence) == departure.StopSequence
+		stopPresent := stopUpdate.StopID != ""
+		stopMatch := !stopPresent
 		if stopUpdate.StopID != "" {
 			staticStop, _ := staticSourceID(departure.StopID)
 			stopMatch = staticStop == string(stopUpdate.StopID)
 		}
-		if stopUpdate.StopSequence != nil && stopUpdate.StopID != "" && !sequenceMatch && !stopMatch {
-			continue
-		}
-		if !sequenceMatch && !stopMatch {
+		if !sequenceMatch || !stopMatch {
 			continue
 		}
 		if stopUpdate.ScheduleRelationship == "SKIPPED" {

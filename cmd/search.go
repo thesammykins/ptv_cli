@@ -32,7 +32,7 @@ var searchCmd = &cobra.Command{
 			return err
 		}
 
-		stops, err := sources.GTFSStore.StopSearch(cmd.Context(), term, gtfsFeedModes(routeTypes), flagLimit)
+		stops, err := sources.GTFSStore.StopSearch(cmd.Context(), term, gtfsFeedModes(routeTypes), 0)
 		if err != nil {
 			return err
 		}
@@ -78,6 +78,7 @@ var searchCmd = &cobra.Command{
 				output.SourceNotice = v3StaticNotice()
 			}
 		}
+		limitGTFSsearchOutput(&output)
 		if flagJSON {
 			return printJSON(output)
 		}
@@ -119,6 +120,29 @@ var searchCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+func limitGTFSsearchOutput(output *searchOutput) {
+	if output == nil || flagLimit <= 0 {
+		return
+	}
+	remaining := flagLimit
+	if len(output.Stops) > remaining {
+		output.Stops = output.Stops[:remaining]
+		output.Routes = output.Routes[:0]
+		output.Outlets = output.Outlets[:0]
+		return
+	}
+	remaining -= len(output.Stops)
+	if len(output.Routes) > remaining {
+		output.Routes = output.Routes[:remaining]
+		output.Outlets = output.Outlets[:0]
+		return
+	}
+	remaining -= len(output.Routes)
+	if len(output.Outlets) > remaining {
+		output.Outlets = output.Outlets[:remaining]
+	}
 }
 
 type searchOutput struct {
