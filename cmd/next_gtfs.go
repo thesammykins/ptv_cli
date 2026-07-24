@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,21 +26,35 @@ func runNextGTFS(ctx context.Context, sources *resolvedSources, query string, mo
 		return err
 	}
 	now := time.Now().In(localtime.Melbourne())
-	anchor := localtime.ServiceDayAnchor(date)
-	low := int(now.Sub(anchor).Seconds())
-	if low < 0 {
-		low = 0
-	}
-	departures, err := sources.GTFSStore.StopDepartures(ctx, stop.StopID, date, nextRoute, gtfsFeedModes(modeTypes), 0)
-	if err != nil {
-		return err
-	}
-	filtered := departures[:0]
-	for _, departure := range departures {
-		if departure.DepartureSec >= low && departure.DepartureSec <= low+2*60*60 {
-			filtered = append(filtered, departure)
+	feedModes := gtfsFeedModes(modeTypes)
+	routeID := strings.TrimSpace(nextRoute)
+	if routeID != "" {
+		route, routeErr := resolveGTFSRoute(ctx, sources.GTFSStore, routeID, feedModes)
+		if routeErr != nil {
+			return routeErr
 		}
+		if routeErr := ensureGTFSRouteServesStop(ctx, sources.GTFSStore, stop, route); routeErr != nil {
+			return routeErr
+		}
+		routeID = route.RouteID
 	}
+	serviceDates := []time.Time{date.AddDate(0, 0, -1), date}
+	anchors := make(map[string]time.Time, len(serviceDates))
+	var departures []gtfs.DepartureResult
+	for _, serviceDate := range serviceDates {
+		serviceAnchor := localtime.ServiceDayAnchor(serviceDate)
+		serviceDateKey := serviceDate.Format("20060102")
+		anchors[serviceDateKey] = serviceAnchor
+		items, queryErr := sources.GTFSStore.StopDepartures(ctx, stop.StopID, serviceDate, routeID, feedModes, 0)
+		if queryErr != nil {
+			if !serviceDate.Equal(date) && errors.Is(queryErr, gtfs.ErrQueryOutsideCoverage) {
+				continue
+			}
+			return queryErr
+		}
+		departures = append(departures, items...)
+	}
+	filtered := filterNextGTFSDepartures(departures, anchors, now)
 	if flagLimit > 0 && len(filtered) > flagLimit {
 		filtered = filtered[:flagLimit]
 	}
@@ -68,6 +84,7 @@ func runNextGTFS(ctx context.Context, sources *resolvedSources, query string, mo
 			routeLabel = departure.RouteLongName
 		}
 		output.Routes[departure.RouteID] = nextRouteOutput{RouteName: departure.RouteLongName, RouteNumber: departure.RouteShortName, RouteType: feedToAPIType(departure.FeedMode), RouteGTFSID: departure.RouteID}
+		anchor := anchors[departure.ServiceDate]
 		scheduled := anchor.Add(time.Duration(departure.DepartureSec) * time.Second).UTC()
 		scheduledString := scheduled.Format(time.RFC3339)
 		localString := scheduled.In(localtime.Melbourne()).Format(time.RFC3339)
@@ -101,6 +118,52 @@ func runNextGTFS(ctx context.Context, sources *resolvedSources, query string, mo
 		table.Row(formatCountdown(when.Sub(time.Now().UTC())), formatLocal(*item.ScheduledDepartureUTC), formatOptionalUTC(item.EstimatedDepartureUTC), item.RouteLabel, item.Towards, item.ServiceStatus)
 	}
 	return table.Flush()
+}
+
+func filterNextGTFSDepartures(departures []gtfs.DepartureResult, anchors map[string]time.Time, now time.Time) []gtfs.DepartureResult {
+	windowEnd := now.Add(2 * time.Hour)
+	filtered := make([]gtfs.DepartureResult, 0, len(departures))
+	for _, departure := range departures {
+		anchor, ok := anchors[departure.ServiceDate]
+		if !ok {
+			continue
+		}
+		when := anchor.Add(time.Duration(departure.DepartureSec) * time.Second)
+		if when.Before(now) || when.After(windowEnd) {
+			continue
+		}
+		filtered = append(filtered, departure)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		left := anchors[filtered[i].ServiceDate].Add(time.Duration(filtered[i].DepartureSec) * time.Second)
+		right := anchors[filtered[j].ServiceDate].Add(time.Duration(filtered[j].DepartureSec) * time.Second)
+		return left.Before(right)
+	})
+	return filtered
+}
+
+func ensureGTFSRouteServesStop(ctx context.Context, store *gtfs.Store, stop gtfs.StopResult, route gtfs.RouteResult) error {
+	routes, err := store.RoutesServingStop(ctx, stop.StopID)
+	if err != nil {
+		return fmt.Errorf("checking whether route serves stop: %w", err)
+	}
+	for _, served := range routes {
+		if served.RouteID == route.RouteID {
+			return nil
+		}
+	}
+	routeName := route.ShortName
+	if routeName == "" {
+		routeName = route.LongName
+	}
+	if routeName == "" {
+		routeName = route.RouteID
+	}
+	stopName := stop.StopName
+	if stopName == "" {
+		stopName = stop.StopID
+	}
+	return fmt.Errorf("route %q does not serve stop %q; use 'ptv stops on %s' to list its stops", routeName, stopName, routeName)
 }
 
 func mergeNextPlatformsFromV3(ctx context.Context, sources *resolvedSources, query string, modeTypes []int, output *nextOutput) {

@@ -152,9 +152,9 @@ func apiToFeedModes(routeType int) []int {
 	case 2:
 		return []int{4, 6}
 	case 3:
-		return []int{1}
+		return []int{1, 5}
 	case 4:
-		return []int{5}
+		return []int{4, 6}
 	default:
 		return nil
 	}
