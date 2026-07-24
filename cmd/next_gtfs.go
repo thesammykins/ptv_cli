@@ -81,6 +81,9 @@ func runNextGTFS(ctx context.Context, sources *resolvedSources, query string, mo
 		output.Departures = append(output.Departures, item)
 	}
 	mergeNextPlatformsFromV3(ctx, sources, query, modeTypes, &output)
+	if nextPlatform != "" {
+		output.Departures = filterNextPlatform(output.Departures, nextPlatform)
+	}
 	if flagJSON {
 		return printJSON(output)
 	}
@@ -147,6 +150,17 @@ func mergeNextPlatformsFromV3(ctx context.Context, sources *resolvedSources, que
 	}
 }
 
+func filterNextPlatform(departures []nextDepartureOutput, platform string) []nextDepartureOutput {
+	platform = strings.TrimSpace(platform)
+	filtered := make([]nextDepartureOutput, 0, len(departures))
+	for _, departure := range departures {
+		if departure.PlatformNumber != nil && strings.TrimSpace(*departure.PlatformNumber) == platform {
+			filtered = append(filtered, departure)
+		}
+	}
+	return filtered
+}
+
 func nextDepartureMatches(primary, enrichment nextDepartureOutput) bool {
 	if primary.ScheduledDepartureUTC == nil || enrichment.ScheduledDepartureUTC == nil {
 		return false
@@ -191,7 +205,7 @@ func applyTripUpdate(item *nextDepartureOutput, departure gtfs.DepartureResult, 
 			stopMatch = staticStop == string(stopUpdate.StopID)
 		}
 		if stopUpdate.StopSequence != nil && stopUpdate.StopID != "" && !sequenceMatch && !stopMatch {
-			return
+			continue
 		}
 		if !sequenceMatch && !stopMatch {
 			continue

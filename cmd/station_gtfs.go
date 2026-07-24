@@ -160,6 +160,24 @@ func mergeStationFacilityOutput(response *ptvapi.StopResponse, output *stationOu
 	if enriched.Stop.StopAmenities == nil && enriched.Stop.StopAccessibility == nil && enriched.Stop.StopStaffing == nil && len(enriched.Disruptions) == 0 {
 		return false
 	}
+	if output.Stop.StopID == 0 {
+		output.Stop.StopID = enriched.Stop.StopID
+	}
+	if output.Stop.PTVStopID == 0 {
+		output.Stop.PTVStopID = enriched.Stop.PTVStopID
+	}
+	for index := range output.Stop.Routes {
+		if output.Stop.Routes[index].RouteID != 0 {
+			continue
+		}
+		for _, route := range enriched.Stop.Routes {
+			if stationRoutesMatch(output.Stop.Routes[index], route) {
+				output.Stop.Routes[index].RouteID = route.RouteID
+				output.Stop.Routes[index].PTVRouteID = route.PTVRouteID
+				break
+			}
+		}
+	}
 	output.Stop.StationType = enriched.Stop.StationType
 	output.Stop.StationDescription = enriched.Stop.StationDescription
 	output.Stop.StopLandmark = enriched.Stop.StopLandmark
@@ -170,6 +188,22 @@ func mergeStationFacilityOutput(response *ptvapi.StopResponse, output *stationOu
 	output.Stop.PTVDisruptionIDs = append([]int64(nil), enriched.Stop.PTVDisruptionIDs...)
 	output.Disruptions = enriched.Disruptions
 	return true
+}
+
+func stationRoutesMatch(primary stationRouteOutput, enrichment stationRouteOutput) bool {
+	values := [][2]string{
+		{primary.RouteNumber, enrichment.RouteNumber},
+		{primary.RouteName, enrichment.RouteName},
+		{primary.RouteGTFSID, enrichment.RouteGTFSID},
+	}
+	for _, pair := range values {
+		left := strings.TrimSpace(pair[0])
+		right := strings.TrimSpace(pair[1])
+		if left != "" && right != "" && strings.EqualFold(left, right) {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveV3StopID(ctx context.Context, store *gtfs.Store, client *ptvapi.Client, query string, modes []int) (int, bool) {
@@ -207,9 +241,21 @@ func resolveV3StopID(ctx context.Context, store *gtfs.Store, client *ptvapi.Clie
 func newGTFSStationOutput(ctx context.Context, store *gtfs.Store, detail *gtfs.StopDetailResult) stationOutput {
 	stop := detail.Stop
 	output := stationOutput{Disruptions: map[string]stationDisruptionOutput{}, Status: stationStatusOutput{}, TimeZone: commandTimeZone, DataSource: "gtfs_static", Freshness: freshnessPtr(currentGTFSFreshness(ctx, store)), Warnings: []string{}}
-	output.Stop = stationStopOutput{StopName: stop.StopName, StopLatitude: &stop.StopLat, StopLongitude: &stop.StopLon, RouteType: feedToAPIType(stop.FeedMode), Routes: make([]stationRouteOutput, 0, len(detail.Routes)), GTFSStopID: stop.StopID, ParentStation: stop.ParentStation, LocationType: stop.LocationType, WheelchairBoarding: stop.WheelchairBoarding, Transfers: detail.Transfers, Pathways: detail.Pathways}
+	legacyStopID := numericSourceID(stop.StopID)
+	output.Stop = stationStopOutput{StopID: legacyStopID, PTVStopID: legacyStopID, StopName: stop.StopName, StopLatitude: &stop.StopLat, StopLongitude: &stop.StopLon, RouteType: feedToAPIType(stop.FeedMode), Routes: make([]stationRouteOutput, 0, len(detail.Routes)), GTFSStopID: stop.StopID, ParentStation: stop.ParentStation, LocationType: stop.LocationType, WheelchairBoarding: stop.WheelchairBoarding, Transfers: detail.Transfers, Pathways: detail.Pathways}
 	for _, route := range detail.Routes {
 		output.Stop.Routes = append(output.Stop.Routes, stationRouteOutput{RouteType: feedToAPIType(route.FeedMode), RouteName: route.LongName, RouteNumber: route.ShortName, RouteGTFSID: route.RouteID})
 	}
 	return output
+}
+
+func numericSourceID(publicID string) int {
+	if _, source, ok := strings.Cut(strings.TrimSpace(publicID), ":"); ok {
+		publicID = source
+	}
+	numeric, err := strconv.Atoi(publicID)
+	if err != nil || numeric <= 0 {
+		return 0
+	}
+	return numeric
 }

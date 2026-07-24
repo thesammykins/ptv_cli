@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/thesammykins/ptv_cli/internal/gtfsrt"
+	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 	"github.com/thesammykins/ptv_cli/internal/render"
 )
 
@@ -50,19 +51,13 @@ func runDisruptionsGTFS(ctx context.Context, sources *resolvedSources, routeType
 		}
 	}
 	if sources.V3Client != nil {
-		if enrichment, enrichmentErr := sources.V3Client.DisruptionsAll(ctx, []int{2, 3}); enrichmentErr == nil {
-			for mode, items := range enrichment.Disruptions {
-				for _, disruption := range items {
-					item := newDisruptionOutput(disruption)
-					item.ID = fmt.Sprintf("v3:%d", disruption.DisruptionID)
-					item.Source = "v3"
-					output.Disruptions[mode] = append(output.Disruptions[mode], item)
-				}
+		if enrichment, enrichmentErr := fetchV3Disruptions(ctx, sources.V3Client, routeTypes, routeQuery); enrichmentErr == nil && enrichment != nil {
+			if appendV3Disruptions(&output, enrichment, routeTypes, routeQuery) > 0 {
+				output.DataSource = "opendata_alerts+v3_enrichment"
+				fmt.Fprintln(os.Stderr, "PTV v3 disruption enrichment applied for requested bus/V/Line scope")
 			}
-			output.DataSource = "opendata_alerts+v3_bus_vline"
-			fmt.Fprintln(os.Stderr, "bus and V/Line disruptions from PTV API; metro and tram from Open Data")
-		} else {
-			output.Warnings = append(output.Warnings, "bus and V/Line disruption enrichment unavailable")
+		} else if enrichmentErr != nil {
+			output.Warnings = append(output.Warnings, "PTV v3 disruption enrichment unavailable")
 		}
 	}
 	if flagJSON {
@@ -82,6 +77,89 @@ func runDisruptionsGTFS(ctx context.Context, sources *resolvedSources, routeType
 		}
 	}
 	return nil
+}
+
+func fetchV3Disruptions(ctx context.Context, client *ptvapi.Client, routeTypes []int, routeQuery string) (*ptvapi.DisruptionsResponse, error) {
+	v3RouteTypes := requestedV3DisruptionTypes(routeTypes)
+	if len(v3RouteTypes) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(routeQuery) == "" {
+		return client.DisruptionsAll(ctx, v3RouteTypes)
+	}
+	route, err := resolveRouteWithTypesContext(ctx, client, routeQuery, v3RouteTypes)
+	if err != nil {
+		return nil, err
+	}
+	return client.DisruptionsForRoute(ctx, route.RouteID)
+}
+
+func requestedV3DisruptionTypes(routeTypes []int) []int {
+	if len(routeTypes) == 0 {
+		return []int{2, 3}
+	}
+	result := make([]int, 0, len(routeTypes))
+	for _, routeType := range routeTypes {
+		if routeType == 2 || routeType == 3 {
+			result = append(result, routeType)
+		}
+	}
+	return result
+}
+
+func appendV3Disruptions(output *disruptionsOutput, response *ptvapi.DisruptionsResponse, routeTypes []int, routeQuery string) int {
+	if output == nil || response == nil {
+		return 0
+	}
+	allowedTypes := requestedV3DisruptionTypes(routeTypes)
+	appended := 0
+	for mode, items := range response.Disruptions {
+		if !v3DisruptionModeAllowed(mode, allowedTypes) {
+			continue
+		}
+		for _, disruption := range items {
+			item := newDisruptionOutput(disruption)
+			if routeQuery != "" && !disruptionMatchesRoute(item, routeQuery) {
+				continue
+			}
+			item.ID = fmt.Sprintf("v3:%d", disruption.DisruptionID)
+			item.Source = "v3"
+			output.Disruptions[mode] = append(output.Disruptions[mode], item)
+			appended++
+		}
+	}
+	return appended
+}
+
+func v3DisruptionModeAllowed(mode string, routeTypes []int) bool {
+	mode = strings.ToLower(strings.NewReplacer("/", "", "_", "", "-", "", " ", "").Replace(mode))
+	var routeType int
+	switch {
+	case strings.Contains(mode, "vline") || strings.Contains(mode, "coach"):
+		routeType = 3
+	case strings.Contains(mode, "bus"):
+		routeType = 2
+	default:
+		return false
+	}
+	for _, allowed := range routeTypes {
+		if allowed == routeType {
+			return true
+		}
+	}
+	return false
+}
+
+func disruptionMatchesRoute(item disruptionOutput, query string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	for _, route := range item.Routes {
+		for _, value := range []string{route.RouteNumber, route.RouteName, route.RouteGTFSID, fmt.Sprint(route.RouteID), fmt.Sprint(route.PTVRouteID)} {
+			if strings.EqualFold(strings.TrimSpace(value), query) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func alertMatchesQuery(alert gtfsrt.Alert, query string) bool {

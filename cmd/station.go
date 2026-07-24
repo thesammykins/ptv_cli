@@ -21,12 +21,6 @@ var stationCmd = &cobra.Command{
 	Long:  "Show stop details, routes and facilities. Metro and V/Line stations return the most detail.",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		sources, err := resolveSources(cmd.Context())
-		if err != nil {
-			return err
-		}
-		defer closeSources(sources)
-
 		var modeHint []int
 		if stationMode != "" {
 			rt, ok := parseMode(stationMode)
@@ -38,6 +32,12 @@ var stationCmd = &cobra.Command{
 		if numericID, numericErr := strconv.Atoi(strings.TrimSpace(joinArgs(args))); numericErr == nil && numericID > 0 && len(modeHint) == 0 {
 			return fmt.Errorf("a numeric station id needs --mode (train, tram, bus, vline, nightbus)")
 		}
+
+		sources, err := resolveSources(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer closeSources(sources)
 
 		commandCtx := cmd.Context()
 		if commandCtx == nil {
