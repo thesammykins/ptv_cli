@@ -1,0 +1,17 @@
+ptv
+
+This project is an independent project and is not affiliated with or endorsed
+by Public Transport Victoria.
+
+PTV Timetable API data included in the embedded enrichment snapshot:
+
+Source: Licensed from Public Transport Victoria under a Creative Commons
+Attribution 4.0 International Licence.
+
+Licence: https://creativecommons.org/licenses/by/4.0/
+Source: https://www.ptv.vic.gov.au/footer/data-and-reporting/datasets/ptv-timetable-api/
+
+The bundled snapshot is a normalized, selected subset of PTV Timetable API
+data and may be out of date. The PTV Timetable API Data is provided as is. Use
+of this data is your responsibility; determine whether it is suitable for
+your purposes.
