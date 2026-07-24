@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/thesammykins/ptv_cli/internal/gtfsrt"
@@ -17,6 +18,26 @@ func TestNewGTFSDisruptionOutputDeduplicatesRepeatedEntities(t *testing.T) {
 	}, 0)
 	if len(item.Routes) != 1 || len(item.Stops) != 1 {
 		t.Fatalf("routes=%d stops=%d, want one each", len(item.Routes), len(item.Stops))
+	}
+}
+
+func TestGTFSDisruptionJSONOmitsPTVNumericIDs(t *testing.T) {
+	encoded, err := json.Marshal(newGTFSDisruptionOutput(gtfsrt.Alert{EntityID: "alert-1", HeaderText: []gtfsrt.TranslatedString{{Text: "Alert"}}}, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["id"] != "alert-1" || fields["source"] != "opendata" {
+		t.Fatalf("identity fields = %v", fields)
+	}
+	if _, ok := fields["disruption_id"]; ok {
+		t.Fatalf("Open Data JSON contains disruption_id: %s", encoded)
+	}
+	if _, ok := fields["ptv_disruption_id"]; ok {
+		t.Fatalf("Open Data JSON contains ptv_disruption_id: %s", encoded)
 	}
 }
 

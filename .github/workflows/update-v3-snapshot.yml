@@ -52,6 +52,8 @@ jobs:
           branch="automation/ptv-v3-snapshot-${GITHUB_RUN_ID}"
           git switch --create "$branch"
           git add internal/v3static/data/snapshot.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "data: refresh embedded PTV v3 snapshot"
           git push --set-upstream origin "$branch"
           gh pr create \

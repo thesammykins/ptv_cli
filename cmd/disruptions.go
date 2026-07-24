@@ -95,8 +95,8 @@ type disruptionsOutput struct {
 }
 
 type disruptionOutput struct {
-	DisruptionID     int64                   `json:"disruption_id"`
-	PTVDisruptionID  int64                   `json:"ptv_disruption_id"`
+	DisruptionID     int64                   `json:"disruption_id,omitempty"`
+	PTVDisruptionID  int64                   `json:"ptv_disruption_id,omitempty"`
 	Title            string                  `json:"title"`
 	URL              string                  `json:"url,omitempty"`
 	Description      string                  `json:"description,omitempty"`
