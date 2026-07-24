@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	gtfs "github.com/MobilityData/gtfs-realtime-bindings/golang/gtfs"
@@ -41,6 +42,52 @@ type Client struct {
 	maxProtobufBytes int64
 	maxErrorBytes    int64
 	now              func() time.Time
+	limiters         map[string]*endpointLimiter
+	limiterMu        sync.Mutex
+}
+
+type endpointLimiter struct {
+	mu     sync.Mutex
+	tokens float64
+	last   time.Time
+}
+
+func newEndpointLimiter(now time.Time) *endpointLimiter {
+	return &endpointLimiter{tokens: 24, last: now}
+}
+func (l *endpointLimiter) wait(ctx context.Context) error {
+	const ratePerSecond = 24.0 / 60.0
+	for {
+		l.mu.Lock()
+		now := time.Now()
+		elapsed := now.Sub(l.last).Seconds()
+		if elapsed > 0 {
+			l.tokens = minimum(24, l.tokens+elapsed*ratePerSecond)
+			l.last = now
+		}
+		if l.tokens >= 1 {
+			l.tokens--
+			l.mu.Unlock()
+			return nil
+		}
+		delay := time.Duration((1 - l.tokens) / ratePerSecond * float64(time.Second))
+		l.mu.Unlock()
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		}
+	}
+}
+func minimum(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // New constructs a GTFS Realtime client using the catalog's documented KeyID
@@ -89,6 +136,7 @@ func NewWithOptions(keyID string, opts ClientOptions) *Client {
 		maxProtobufBytes: maxProtobufBytes,
 		maxErrorBytes:    maxErrorBytes,
 		now:              now,
+		limiters:         make(map[string]*endpointLimiter),
 	}
 }
 
@@ -101,6 +149,17 @@ func (c *Client) FetchSnapshot(ctx context.Context, feed Feed) (snapshot *Snapsh
 
 	if err := validateFeed(feed); err != nil {
 		return nil, err
+	}
+	canonical := feed.URL
+	c.limiterMu.Lock()
+	limiter := c.limiters[canonical]
+	if limiter == nil {
+		limiter = newEndpointLimiter(c.now())
+		c.limiters[canonical] = limiter
+	}
+	c.limiterMu.Unlock()
+	if err := limiter.wait(ctx); err != nil {
+		return nil, &Error{Kind: ErrorCanceled, FeedID: feed.ID, Message: "request canceled", Err: err}
 	}
 	if feed.Authentication.Required && c.keyID == "" {
 		return nil, &Error{Kind: ErrorAuthentication, FeedID: feed.ID, Message: "missing Open Data KeyID credential"}

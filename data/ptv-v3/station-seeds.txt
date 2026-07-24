@@ -1,0 +1,4 @@
+# Bounded v3 Stop Details seeds retained in the bundled snapshot.
+# Format: route_type:ptv_stop_id
+0:1071
+3:1071

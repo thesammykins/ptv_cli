@@ -42,6 +42,7 @@ Matching strings do not make identifiers interchangeable.
 | `ptv_run_ref` | PTV Timetable API run reference |
 | `ptv_disruption_id` | PTV Timetable API disruption identifier |
 | `gtfs_stop_id`, `gtfs_trip_id`, `gtfs_route_id`, `gtfs_block_id` | static GTFS source identifier, namespaced by the local compiler where applicable |
+| `v3_static_snapshot` | reviewed, generated PTV Timetable API v3 enrichment data bundled with the binary |
 | `feed_entity_id` | GTFS Realtime `FeedEntity.id` |
 | `public_label` | public vehicle label used for user identity and GTFS-R matching |
 | `ptv_vehicle_descriptor_id` | public descriptor value exposed by PTV v3 |
@@ -68,11 +69,11 @@ equality.
 | `auth opendata status` | `configured`, `has_api_id`, `api_id_transmitted` |
 | `auth opendata check` | `ok`, `feed_id`, `entities`, `authentication_header`, `api_id_transmitted` |
 | `auth opendata login/logout` | credential category plus result; login also states `api_id_transmitted:false` |
-| `search` | `stops[]`, `routes[]`, `outlets[]`, `status` |
+| `search` | `stops[]`, `routes[]`, `outlets[]`, `status`, additive `data_source`, `source_notice` when bundled v3 outlets are used, `freshness`, `warnings` |
 | `lines` | `routes[]`, compatibility `route`, `status` |
 | `lines show` or `lines <route>` | `route`, `directions[]`, `stops` keyed by direction |
 | `stops near` / `stops on` | `stops[]`, `status`; `stops near` adds `attribution` when geocoding contributed |
-| `station` | `stop` (nested location, amenities, accessibility, staffing, routes), `disruptions`, `status` |
+| `station` | `stop` (nested location, amenities, accessibility, staffing, routes), `disruptions`, `status`, optional `source_notice` when bundled v3 facilities are used |
 | `next` and mode-scoped `next` | `departures[]`, expanded `stops`, `routes`, `runs`, `directions`, `disruptions`, `status`, `time_zone` |
 | `train/tram/bus/vline <route>` | `route`, `directions[]`, `stops`, `disruptions[]`, `time_zone` |
 | `train/tram/bus/vline lines` | `routes[]`, compatibility `route`, `status` |
@@ -80,7 +81,7 @@ equality.
 | `plan` | `legs[]`, `depart`, `arrive`, `transfers`, optional `disruptions[]`, `time_zone`, `attribution[]`, `warnings[]` |
 | `disruptions` | mode-keyed `disruptions`, `status`, `time_zone` |
 | `fare` | endpoint-specific `FareEstimateResultStatus` and `FareEstimateResult`; this endpoint does not return the generic PTV `status` object |
-| `outlets` | `outlets[]`, `status` |
+| `outlets` | `outlets[]`, `status`, additive `data_source`, optional `snapshot_generated_at`, `source_notice`, `warnings` |
 | `gtfs update` | published generation identity, archive retention, persisted counts, coverage, and provenance |
 | `gtfs status` | generation, persisted dataset state/counts, and `freshness`; missing/legacy states return `ingested:false` plus `action` |
 | `gtfs check` | source-keyed freshness report; `--force` bypasses success throttling or failure backoff |

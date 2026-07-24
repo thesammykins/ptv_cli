@@ -23,6 +23,8 @@ func NormalizeSnapshot(feed Feed, message *gtfs.FeedMessage, fetchedAt time.Time
 		FeedFreshness:  TimestampFreshness{State: FreshnessUnknown},
 		labelIndex:     make(map[string][]int),
 		entityIndex:    make(map[FeedEntityID]int),
+		tripIndex:      make(map[string]int),
+		alertIndex:     make(map[FeedEntityID]int),
 	}
 	if message == nil {
 		return snapshot
@@ -62,6 +64,9 @@ func NormalizeSnapshot(feed Feed, message *gtfs.FeedMessage, fetchedAt time.Time
 			HasVehicle:    entity.GetVehicle() != nil,
 			HasAlert:      entity.GetAlert() != nil,
 		}
+		if _, exists := snapshot.entityIndex[metadata.ID]; exists {
+			snapshot.Counts.Duplicates++
+		}
 		snapshot.entityIndex[metadata.ID] = len(snapshot.Entities)
 		snapshot.Entities = append(snapshot.Entities, metadata)
 		snapshot.Counts.Entities++
@@ -74,19 +79,167 @@ func NormalizeSnapshot(feed Feed, message *gtfs.FeedMessage, fetchedAt time.Time
 		if metadata.HasAlert {
 			snapshot.Counts.Alerts++
 		}
-		if !metadata.HasVehicle {
+		if metadata.Deleted {
 			continue
 		}
-
-		observation := normalizeVehicle(entity, snapshot.FeedFreshness, fetchedAt)
-		vehicleIndex := len(snapshot.Vehicles)
-		snapshot.Vehicles = append(snapshot.Vehicles, observation)
-		snapshot.Counts.Vehicles++
-		for _, key := range identifierKeys(string(observation.Label)) {
-			snapshot.labelIndex[key] = append(snapshot.labelIndex[key], vehicleIndex)
+		if metadata.HasVehicle {
+			observation := normalizeVehicle(entity, snapshot.FeedFreshness, fetchedAt)
+			vehicleIndex := len(snapshot.Vehicles)
+			snapshot.Vehicles = append(snapshot.Vehicles, observation)
+			snapshot.Counts.Vehicles++
+			for _, key := range identifierKeys(string(observation.Label)) {
+				snapshot.labelIndex[key] = append(snapshot.labelIndex[key], vehicleIndex)
+			}
+		}
+		if metadata.HasTripUpdate {
+			update := normalizeTripUpdate(entity, snapshot.FeedFreshness, fetchedAt)
+			key := string(update.TripID) + "\x00" + update.StartDate
+			if previous, exists := snapshot.tripIndex[key]; exists {
+				snapshot.Counts.Duplicates++
+				snapshot.TripUpdates[previous] = update
+			} else {
+				snapshot.tripIndex[key] = len(snapshot.TripUpdates)
+				snapshot.TripUpdates = append(snapshot.TripUpdates, update)
+			}
+		}
+		if metadata.HasAlert {
+			alert := normalizeAlert(entity, snapshot.FeedFreshness, fetchedAt)
+			if previous, exists := snapshot.alertIndex[alert.EntityID]; exists {
+				snapshot.Counts.Duplicates++
+				snapshot.Alerts[previous] = alert
+			} else {
+				snapshot.alertIndex[alert.EntityID] = len(snapshot.Alerts)
+				snapshot.Alerts = append(snapshot.Alerts, alert)
+			}
 		}
 	}
 	return snapshot
+}
+
+func normalizeTripUpdate(entity *gtfs.FeedEntity, feedFreshness TimestampFreshness, fetchedAt time.Time) TripUpdate {
+	update := entity.GetTripUpdate()
+	descriptor := update.GetTrip()
+	result := TripUpdate{EntityID: FeedEntityID(entity.GetId()), TripID: StaticTripID(descriptor.GetTripId()), RouteID: StaticRouteID(descriptor.GetRouteId()), StartDate: descriptor.GetStartDate(), StartTime: descriptor.GetStartTime(), ScheduleRelationship: descriptor.GetScheduleRelationship().String(), StopTimeUpdates: []StopTimeUpdate{}, Freshness: ObservationFreshness{Feed: feedFreshness, Entity: TimestampFreshness{State: FreshnessUnknown}}}
+	if update.Vehicle != nil {
+		result.VehicleLabel = PublicVehicleLabel(update.GetVehicle().GetLabel())
+		result.VehicleID = update.GetVehicle().GetId()
+	}
+	if descriptor.DirectionId != nil {
+		v := int32(descriptor.GetDirectionId())
+		result.DirectionID = &v
+	}
+	if update.Timestamp != nil && update.GetTimestamp() > 0 {
+		observed := time.Unix(int64(update.GetTimestamp()), 0).UTC()
+		result.Timestamp = &observed
+		result.Freshness.Entity = classifyTimestamp(&observed, fetchedAt)
+	}
+	for _, item := range update.GetStopTimeUpdate() {
+		if item == nil {
+			continue
+		}
+		normalized := StopTimeUpdate{StopID: StaticStopID(item.GetStopId()), ScheduleRelationship: item.GetScheduleRelationship().String()}
+		if item.StopSequence != nil {
+			v := int32(item.GetStopSequence())
+			normalized.StopSequence = &v
+		}
+		normalized.ArrivalTime, normalized.ArrivalDelay, normalized.ArrivalUncertainty = stopEvent(item.GetArrival())
+		normalized.DepartureTime, normalized.DepartureDelay, normalized.DepartureUncertainty = stopEvent(item.GetDeparture())
+		result.StopTimeUpdates = append(result.StopTimeUpdates, normalized)
+	}
+	result.Freshness.Overall = combineFreshness(result.Freshness.Feed.State, result.Freshness.Entity.State)
+	return result
+}
+
+func stopEvent(event *gtfs.TripUpdate_StopTimeEvent) (*int64, *int32, *int32) {
+	if event == nil {
+		return nil, nil, nil
+	}
+	var at *int64
+	var delay, uncertainty *int32
+	if event.Time != nil {
+		v := event.GetTime()
+		at = &v
+	}
+	if event.Delay != nil {
+		v := event.GetDelay()
+		delay = &v
+	}
+	if event.Uncertainty != nil {
+		v := event.GetUncertainty()
+		uncertainty = &v
+	}
+	return at, delay, uncertainty
+}
+
+func normalizeAlert(entity *gtfs.FeedEntity, feedFreshness TimestampFreshness, fetchedAt time.Time) Alert {
+	raw := entity.GetAlert()
+	result := Alert{EntityID: FeedEntityID(entity.GetId()), Cause: raw.GetCause().String(), Effect: raw.GetEffect().String(), ActivePeriods: []AlertPeriod{}, InformedEntities: []AlertEntity{}, HeaderText: selectTranslations(raw.GetHeaderText()), DescriptionText: selectTranslations(raw.GetDescriptionText()), URL: selectTranslations(raw.GetUrl()), Freshness: ObservationFreshness{Feed: feedFreshness, Entity: TimestampFreshness{State: FreshnessUnknown}}}
+	for _, period := range raw.GetActivePeriod() {
+		if period == nil {
+			continue
+		}
+		item := AlertPeriod{}
+		if period.Start != nil {
+			v := time.Unix(int64(period.GetStart()), 0).UTC()
+			item.Start = &v
+		}
+		if period.End != nil {
+			v := time.Unix(int64(period.GetEnd()), 0).UTC()
+			item.End = &v
+		}
+		result.ActivePeriods = append(result.ActivePeriods, item)
+	}
+	for _, selector := range raw.GetInformedEntity() {
+		if selector == nil {
+			continue
+		}
+		item := AlertEntity{AgencyID: selector.GetAgencyId(), RouteID: selector.GetRouteId(), StopID: selector.GetStopId()}
+		if selector.RouteType != nil {
+			v := selector.GetRouteType()
+			item.RouteType = &v
+		}
+		if selector.DirectionId != nil {
+			v := int32(selector.GetDirectionId())
+			item.DirectionID = &v
+		}
+		if selector.Trip != nil {
+			item.TripID = selector.GetTrip().GetTripId()
+		}
+		result.InformedEntities = append(result.InformedEntities, item)
+	}
+	if len(result.ActivePeriods) > 0 {
+		now := fetchedAt
+		for _, period := range result.ActivePeriods {
+			if (period.Start == nil || !now.Before(*period.Start)) && (period.End == nil || now.Before(*period.End)) {
+				result.Freshness.Entity = TimestampFreshness{State: FreshnessCurrent}
+				break
+			}
+		}
+	}
+	result.Freshness.Overall = combineFreshness(result.Freshness.Feed.State, result.Freshness.Entity.State)
+	return result
+}
+
+func selectTranslations(value *gtfs.TranslatedString) []TranslatedString {
+	if value == nil {
+		return []TranslatedString{}
+	}
+	var fallback *gtfs.TranslatedString_Translation
+	for _, item := range value.GetTranslation() {
+		if item == nil || strings.TrimSpace(item.GetText()) == "" {
+			continue
+		}
+		if fallback == nil {
+			fallback = item
+		}
+		if strings.EqualFold(item.GetLanguage(), "en") || strings.EqualFold(item.GetLanguage(), "en-US") {
+			return []TranslatedString{{Language: item.GetLanguage(), Text: item.GetText()}}
+		}
+	}
+	if fallback == nil {
+		return []TranslatedString{}
+	}
+	return []TranslatedString{{Language: fallback.GetLanguage(), Text: fallback.GetText()}}
 }
 
 func normalizeVehicle(entity *gtfs.FeedEntity, feedFreshness TimestampFreshness, fetchedAt time.Time) VehicleObservation {
@@ -205,6 +358,54 @@ func (s *Snapshot) FindEntity(id FeedEntityID) (EntityMetadata, bool) {
 		return EntityMetadata{}, false
 	}
 	return s.Entities[index], true
+}
+
+func (s *Snapshot) FindTripUpdate(tripID StaticTripID, startDate string) (*TripUpdate, bool) {
+	if s == nil {
+		return nil, false
+	}
+	index, ok := s.tripIndex[string(tripID)+"\x00"+startDate]
+	if !ok {
+		return nil, false
+	}
+	return &s.TripUpdates[index], true
+}
+
+func (s *Snapshot) AlertsForRoute(routeID string) []Alert {
+	if s == nil {
+		return nil
+	}
+	var result []Alert
+	for _, alert := range s.Alerts {
+		for _, entity := range alert.InformedEntities {
+			if entity.RouteID == routeID {
+				result = append(result, alert)
+				break
+			}
+		}
+	}
+	return result
+}
+func (s *Snapshot) AlertsForStop(stopID string) []Alert {
+	if s == nil {
+		return nil
+	}
+	var result []Alert
+	for _, alert := range s.Alerts {
+		for _, entity := range alert.InformedEntities {
+			if entity.StopID == stopID {
+				result = append(result, alert)
+				break
+			}
+		}
+	}
+	return result
+}
+func (s *Snapshot) AllAlerts() []Alert {
+	if s == nil {
+		return nil
+	}
+	return append([]Alert(nil), s.Alerts...)
 }
 
 func fresherObservation(candidate, current VehicleObservation) bool {

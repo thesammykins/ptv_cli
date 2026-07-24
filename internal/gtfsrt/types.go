@@ -65,6 +65,63 @@ type EntityCounts struct {
 	Vehicles    int `json:"vehicles"`
 	Alerts      int `json:"alerts"`
 	Deleted     int `json:"deleted"`
+	Duplicates  int `json:"duplicates,omitempty"`
+}
+
+type StopTimeUpdate struct {
+	StopID               StaticStopID `json:"stop_id,omitempty"`
+	StopSequence         *int32       `json:"stop_sequence,omitempty"`
+	ArrivalTime          *int64       `json:"arrival_time,omitempty"`
+	ArrivalDelay         *int32       `json:"arrival_delay,omitempty"`
+	ArrivalUncertainty   *int32       `json:"arrival_uncertainty,omitempty"`
+	DepartureTime        *int64       `json:"departure_time,omitempty"`
+	DepartureDelay       *int32       `json:"departure_delay,omitempty"`
+	DepartureUncertainty *int32       `json:"departure_uncertainty,omitempty"`
+	ScheduleRelationship string       `json:"schedule_relationship"`
+}
+
+type TripUpdate struct {
+	EntityID             FeedEntityID         `json:"entity_id"`
+	TripID               StaticTripID         `json:"trip_id,omitempty"`
+	RouteID              StaticRouteID        `json:"route_id,omitempty"`
+	DirectionID          *int32               `json:"direction_id,omitempty"`
+	StartDate            string               `json:"start_date,omitempty"`
+	StartTime            string               `json:"start_time,omitempty"`
+	ScheduleRelationship string               `json:"schedule_relationship"`
+	VehicleLabel         PublicVehicleLabel   `json:"vehicle_label,omitempty"`
+	VehicleID            string               `json:"-"`
+	Timestamp            *time.Time           `json:"timestamp,omitempty"`
+	StopTimeUpdates      []StopTimeUpdate     `json:"stop_time_updates"`
+	Freshness            ObservationFreshness `json:"freshness"`
+}
+
+type AlertEntity struct {
+	AgencyID    string `json:"agency_id,omitempty"`
+	RouteID     string `json:"route_id,omitempty"`
+	RouteType   *int32 `json:"route_type,omitempty"`
+	DirectionID *int32 `json:"direction_id,omitempty"`
+	TripID      string `json:"trip_id,omitempty"`
+	StopID      string `json:"stop_id,omitempty"`
+}
+
+type AlertPeriod struct {
+	Start *time.Time `json:"start,omitempty"`
+	End   *time.Time `json:"end,omitempty"`
+}
+type TranslatedString struct {
+	Language string `json:"language,omitempty"`
+	Text     string `json:"text"`
+}
+type Alert struct {
+	EntityID         FeedEntityID         `json:"entity_id"`
+	Cause            string               `json:"cause,omitempty"`
+	Effect           string               `json:"effect,omitempty"`
+	ActivePeriods    []AlertPeriod        `json:"active_periods"`
+	InformedEntities []AlertEntity        `json:"informed_entities"`
+	HeaderText       []TranslatedString   `json:"header_text"`
+	DescriptionText  []TranslatedString   `json:"description_text"`
+	URL              []TranslatedString   `json:"url"`
+	Freshness        ObservationFreshness `json:"freshness"`
 }
 
 // VehicleObservation is the normalized public boundary for a vehicle-position
@@ -101,7 +158,11 @@ type Snapshot struct {
 	Entities       []EntityMetadata     `json:"entities"`
 	Counts         EntityCounts         `json:"counts"`
 	Vehicles       []VehicleObservation `json:"vehicles"`
+	TripUpdates    []TripUpdate         `json:"trip_updates"`
+	Alerts         []Alert              `json:"alerts"`
 
 	labelIndex  map[string][]int
 	entityIndex map[FeedEntityID]int
+	tripIndex   map[string]int
+	alertIndex  map[FeedEntityID]int
 }

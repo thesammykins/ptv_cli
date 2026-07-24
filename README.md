@@ -1,5 +1,8 @@
 # ptv — Victorian public transport from your terminal
 
+`ptv` is an independent project and is not affiliated with or endorsed by
+Public Transport Victoria.
+
 `ptv` is a command-line companion for Victorian public transport. It combines
 the **PTV Timetable API v3** (real-time departures, disruptions, line and
 station information) with the **PTV GTFS static feed** (multi-modal journey
@@ -92,6 +95,14 @@ configuration, but the current feed contract does not document it and the CLI
 does not transmit it. Without the subscription key, the core PTV
 Timetable API features still work; commands that can use GTFS Realtime data will
 print a warning and skip that enrichment.
+
+The CLI also ships a reviewed, normalized snapshot of selected low-volatility
+PTV Timetable API v3 enrichment data, limited to outlet records and explicitly
+seeded station facilities. It never supplies static route or direction data:
+live v3 or local GTFS remains authoritative for route topology, schedules and
+journey planning, while GTFS-Realtime remains authoritative for live state.
+See [the snapshot workflow](docs/ptv-v3-snapshot.md) for regeneration,
+attribution, and the monthly update process.
 
 Store them securely in the OS keyring:
 

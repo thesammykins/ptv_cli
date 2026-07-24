@@ -19,6 +19,7 @@ var gtfsKeepZip bool
 var gtfsNoUpdateCheck bool
 var gtfsCheckForce bool
 var gtfsRealtimeAll bool
+var gtfsBackgroundWorker bool
 
 const (
 	defaultGTFSStatusFreshnessBudget = 1500 * time.Millisecond
@@ -97,7 +98,7 @@ var gtfsUpdateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Download and ingest the latest PTV GTFS feed",
 	Args:  cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) (runErr error) {
 		cfg, err := loadRuntimeConfig()
 		if err != nil {
 			return err
@@ -112,7 +113,18 @@ var gtfsUpdateCmd = &cobra.Command{
 		}
 		defer update.Release()
 
-		if !flagJSON {
+		if gtfsBackgroundWorker {
+			startedAt := time.Now().UTC().Format(time.RFC3339)
+			_ = gtfs.WriteUpdateProgress(cfg.DataDir, gtfs.UpdateProgress{State: "downloading", StartedAt: startedAt})
+			defer func() {
+				if runErr != nil {
+					_ = gtfs.WriteUpdateProgress(cfg.DataDir, gtfs.UpdateProgress{
+						State: "failed", FailedAt: time.Now().UTC().Format(time.RFC3339), Error: render.CleanText(runErr.Error()),
+					})
+				}
+			}()
+		}
+		if !flagJSON && !gtfsBackgroundWorker {
 			fmt.Printf("Downloading GTFS feed from %s\n", render.CleanText(gtfs.RedactSourceURL(cfg.GTFSURL)))
 			fmt.Println("(this is a large file, ~200MB; please wait)")
 		}
@@ -139,7 +151,7 @@ var gtfsUpdateCmd = &cobra.Command{
 			}
 		}()
 
-		if !flagJSON {
+		if !flagJSON && !gtfsBackgroundWorker {
 			fmt.Println("Compiling and validating a new immutable generation...")
 		}
 		state, err := gtfs.IngestGeneration(cmd.Context(), staging.Store, dl.Path, gtfs.IngestGenerationOptions{
@@ -159,6 +171,9 @@ var gtfsUpdateCmd = &cobra.Command{
 			return err
 		}
 		published = true
+		if gtfsBackgroundWorker {
+			_ = gtfs.WriteUpdateProgress(cfg.DataDir, gtfs.UpdateProgress{State: "completed", CompletedAt: time.Now().UTC().Format(time.RFC3339), GenerationID: staging.Ref.ID})
+		}
 		if flagJSON {
 			return printJSON(gtfsUpdateOutput{
 				Database: staging.Path(), DownloadedZip: dl.Path, KeptZip: gtfsKeepZip,
@@ -571,6 +586,8 @@ func statusFreshness(
 
 func init() {
 	gtfsUpdateCmd.Flags().BoolVar(&gtfsKeepZip, "keep-zip", false, "keep the downloaded zip after ingest")
+	gtfsUpdateCmd.Flags().BoolVar(&gtfsBackgroundWorker, "background-worker", false, "internal auto-update worker mode")
+	_ = gtfsUpdateCmd.Flags().MarkHidden("background-worker")
 	gtfsStatusCmd.Flags().BoolVar(&gtfsNoUpdateCheck, "no-update-check", false, "skip the live upstream update check")
 	gtfsCheckCmd.Flags().BoolVar(&gtfsCheckForce, "force", false, "bypass cached success timing or failed-check backoff")
 	gtfsRealtimeCmd.Flags().BoolVar(&gtfsRealtimeAll, "all", false, "fetch every known GTFS Realtime feed")

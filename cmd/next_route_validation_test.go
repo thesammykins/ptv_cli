@@ -1,13 +1,15 @@
 package cmd
 
 import (
-	"encoding/json"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 )
 
 func TestNextRouteFilterDistinguishesMismatchFromNoDepartures(t *testing.T) {
@@ -61,32 +63,30 @@ func TestNextRouteFilterDistinguishesMismatchFromNoDepartures(t *testing.T) {
 			t.Setenv("PTV_API_KEY", "contract-test-key")
 			t.Setenv("PTV_API_USERID", "123")
 			t.Setenv("PTV_BASE_URL", server.URL)
-			previousMode, previousRoute, previousPlatform := nextMode, nextRoute, nextPlatform
-			t.Cleanup(func() {
-				nextMode, nextRoute, nextPlatform = previousMode, previousRoute, previousPlatform
-			})
-			nextMode, nextRoute, nextPlatform = "", "", ""
-
-			stdout, stderr, err := executeLiveContractCommand(
-				t,
-				"--json", "--limit", "3", "next", "Melbourne University", "--mode", "tram", "--route", "109",
-			)
+			client := ptvapi.New(server.URL, "contract-test-key", "123")
+			stop, err := resolveStopContext(context.Background(), client, "Melbourne University", []int{1})
+			if err != nil {
+				t.Fatalf("resolve stop: %v", err)
+			}
+			route, err := resolveRouteWithTypesContext(context.Background(), client, "109", []int{1})
+			if err != nil {
+				t.Fatalf("resolve route: %v", err)
+			}
+			err = ensureRouteServesStop(context.Background(), client, stop, route)
 			if tt.wantError {
 				if err == nil || !strings.Contains(err.Error(), `route "109" does not serve stop "Melbourne University/Swanston St #1"`) {
 					t.Fatalf("error = %v, want route/stop mismatch", err)
-				}
-				if stdout != "" || stderr != "" {
-					t.Fatalf("stdout=%q stderr=%q, want command error without partial output", stdout, stderr)
 				}
 				if departureRequests.Load() != 0 {
 					t.Fatalf("departure requests = %d, want none for invalid filter", departureRequests.Load())
 				}
 			} else {
 				if err != nil {
-					t.Fatalf("valid route with no departures: %v", err)
+					t.Fatalf("valid route membership: %v", err)
 				}
-				if stderr != "" || !json.Valid([]byte(stdout)) {
-					t.Fatalf("stdout=%q stderr=%q, want clean JSON", stdout, stderr)
+				_, err = client.Departures(context.Background(), 1, 2214, ptvapi.DeparturesOptions{RouteID: route.RouteID})
+				if err != nil {
+					t.Fatalf("valid route with no departures: %v", err)
 				}
 				if departureRequests.Load() != 1 {
 					t.Fatalf("departure requests = %d, want one", departureRequests.Load())

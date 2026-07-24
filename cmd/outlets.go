@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"fmt"
+	"os"
 	"sort"
 
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/config"
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 	"github.com/thesammykins/ptv_cli/internal/render"
+	"github.com/thesammykins/ptv_cli/internal/v3static"
 )
 
 var outletsCmd = &cobra.Command{
@@ -13,32 +17,67 @@ var outletsCmd = &cobra.Command{
 	Short: "List or search myki ticket outlets",
 	Args:  cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, _, err := loadClient()
+		staticSnapshot, err := v3static.LoadEmbedded()
 		if err != nil {
 			return err
 		}
+		var client *ptvapi.Client
+		if runtimeConfig, runtimeErr := loadRuntimeConfig(); runtimeErr == nil {
+			if credentials, credentialErr := config.LoadPTVCredentialsWithOptions(config.LoadOptions{EnvFile: flagEnv}); credentialErr == nil {
+				client = ptvapi.New(runtimeConfig.BaseURL, credentials.APIKey, credentials.DevID)
+			}
+		}
 		var outlets []ptvapi.ResultOutlet
 		var status ptvapi.Status
-		if len(args) > 0 {
-			resp, err := client.Search(cmd.Context(), joinArgs(args), nil)
-			if err != nil {
-				return err
+		dataSource := "v3_static_snapshot"
+		var warnings []string
+		if client != nil {
+			if len(args) > 0 {
+				resp, searchErr := client.Search(cmd.Context(), joinArgs(args), nil)
+				if searchErr == nil {
+					outlets = resp.Outlets
+					status = resp.Status
+					dataSource = "ptv_api_v3"
+				} else {
+					warnings = append(warnings, "PTV outlet data unavailable; showing bundled snapshot")
+				}
+			} else {
+				resp, listErr := client.Outlets(cmd.Context(), flagLimit)
+				if listErr == nil {
+					outlets = resp.Outlets
+					status = resp.Status
+					dataSource = "ptv_api_v3"
+				} else {
+					warnings = append(warnings, "PTV outlet data unavailable; showing bundled snapshot")
+				}
 			}
-			outlets = resp.Outlets
-			status = resp.Status
-		} else {
-			resp, err := client.Outlets(cmd.Context(), flagLimit)
-			if err != nil {
-				return err
+		}
+		if dataSource == "v3_static_snapshot" {
+			if len(args) > 0 {
+				for _, outlet := range staticSnapshot.SearchOutlets(joinArgs(args), 0) {
+					outlets = append(outlets, ptvapi.ResultOutlet{OutletName: outlet.OutletName, OutletBusiness: outlet.OutletBusiness, OutletLatitude: outlet.OutletLatitude, OutletLongitude: outlet.OutletLongitude, OutletSuburb: outlet.OutletSuburb})
+				}
+			} else {
+				for _, outlet := range staticSnapshot.AllOutlets(0) {
+					outlets = append(outlets, ptvapi.ResultOutlet{OutletName: outlet.OutletName, OutletBusiness: outlet.OutletBusiness, OutletLatitude: outlet.OutletLatitude, OutletLongitude: outlet.OutletLongitude, OutletSuburb: outlet.OutletSuburb})
+				}
 			}
-			outlets = resp.Outlets
-			status = resp.Status
+			status = ptvapi.Status{Version: "static-v3-snapshot", Health: 1}
 		}
 		sortOutlets(outlets)
 		outlets = limitOutlets(outlets)
 		output := newOutletsOutput(outlets, status)
+		output.DataSource = dataSource
+		output.Warnings = warnings
+		if dataSource == "v3_static_snapshot" {
+			output.SnapshotGeneratedAt = staticSnapshot.GeneratedAt
+			output.SourceNotice = v3StaticNotice()
+		}
 		if flagJSON {
 			return printJSON(output)
+		}
+		for _, warning := range output.Warnings {
+			fmt.Fprintln(os.Stderr, warning)
 		}
 		t := render.NewTable("NAME", "BUSINESS", "SUBURB")
 		for _, o := range output.Outlets {
@@ -52,8 +91,12 @@ var outletsCmd = &cobra.Command{
 }
 
 type outletsOutput struct {
-	Outlets []outletOutput     `json:"outlets"`
-	Status  outletStatusOutput `json:"status"`
+	Outlets             []outletOutput      `json:"outlets"`
+	Status              outletStatusOutput  `json:"status"`
+	DataSource          string              `json:"data_source,omitempty"`
+	SnapshotGeneratedAt string              `json:"snapshot_generated_at,omitempty"`
+	SourceNotice        *sourceNoticeOutput `json:"source_notice,omitempty"`
+	Warnings            []string            `json:"warnings,omitempty"`
 }
 
 // outletOutput intentionally excludes outlet_slid_spid, an upstream lookup

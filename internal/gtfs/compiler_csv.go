@@ -28,17 +28,17 @@ type compiledTrip struct {
 }
 
 type feedCompiler struct {
-	feedKey                int64
-	mode                   int
-	files                  map[string]*zip.File
-	stops                  map[string]compiledStop
-	routes                 map[string]int64
-	services               map[string]int64
-	calendarServiceIDs     map[string]struct{}
-	trips                  map[string]compiledTrip
-	levels                 map[string]int64
-	duplicateTrips         int64
-	nonIncreasingSegments  int64
+	feedKey               int64
+	mode                  int
+	files                 map[string]*zip.File
+	stops                 map[string]compiledStop
+	routes                map[string]int64
+	services              map[string]int64
+	calendarServiceIDs    map[string]struct{}
+	trips                 map[string]compiledTrip
+	levels                map[string]int64
+	duplicateTrips        int64
+	nonIncreasingSegments int64
 }
 
 func compileInnerArchive(ctx context.Context, tx *sql.Tx, path string, feed outerFeed) (feedCompileStats, error) {

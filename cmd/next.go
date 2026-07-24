@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/thesammykins/ptv_cli/internal/localtime"
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
-	"github.com/thesammykins/ptv_cli/internal/render"
 )
 
 var (
@@ -27,11 +26,6 @@ var nextCmd = &cobra.Command{
 scheduled vs estimated times, platform numbers and any disruptions.`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, _, err := loadClient()
-		if err != nil {
-			return err
-		}
-
 		var modeHint []int
 		if nextMode != "" {
 			rt, ok := parseMode(nextMode)
@@ -41,114 +35,12 @@ scheduled vs estimated times, platform numbers and any disruptions.`,
 			modeHint = []int{rt}
 		}
 
-		stop, err := resolveStopContext(cmd.Context(), client, joinArgs(args), modeHint)
+		sources, err := resolveSources(cmd.Context())
 		if err != nil {
 			return err
 		}
-		if stop.RouteType < 0 {
-			return fmt.Errorf("a numeric stop id needs --mode (train, tram, bus, vline, nightbus)")
-		}
-
-		opts := ptvapi.DeparturesOptions{
-			MaxResults: orDefault(flagLimit, 8),
-			Expand:     []string{ptvapi.ExpandRoute, ptvapi.ExpandRun, ptvapi.ExpandDirection, ptvapi.ExpandDisruption},
-		}
-		if nextRoute != "" {
-			routeTypes := modeHint
-			if len(routeTypes) == 0 {
-				routeTypes = []int{stop.RouteType}
-			}
-			route, rerr := resolveRouteWithTypesContext(cmd.Context(), client, nextRoute, routeTypes)
-			if rerr != nil {
-				return rerr
-			}
-			if rerr := ensureRouteServesStop(cmd.Context(), client, stop, route); rerr != nil {
-				return rerr
-			}
-			opts.RouteID = route.RouteID
-		}
-
-		resp, err := client.Departures(cmd.Context(), stop.RouteType, stop.StopID, opts)
-		if err != nil {
-			return err
-		}
-		deps := resp.Departures
-		if nextPlatform != "" {
-			deps = filterPlatform(deps, nextPlatform)
-		}
-		sortDepartures(deps)
-		deps = limitDepartures(deps)
-		resp.Departures = deps
-		if flagJSON {
-			return printJSON(newNextOutput(resp))
-		}
-
-		stopName := stop.StopName
-		if s, ok := resp.Stops[strconv.Itoa(stop.StopID)]; ok && s.StopName != "" {
-			stopName = s.StopName
-		} else if stopName == "" {
-			stopName = fmt.Sprintf("Stop %d", stop.StopID)
-		}
-		fmt.Printf("Next departures — %s (%s)\n\n", render.CleanText(stopName), routeTypeName(stop.RouteType))
-
-		if len(deps) == 0 {
-			fmt.Println("No upcoming departures.")
-			return nil
-		}
-
-		now := time.Now()
-		t := render.NewTable("IN", "SCHEDULED", "EST", "PLAT", "ROUTE", "TOWARDS", "STATUS")
-		for _, d := range deps {
-			when, isEst := departureTime(d)
-			countdown := "-"
-			estStr := "-"
-			schedStr := "-"
-			if d.ScheduledDepartureUTC != nil {
-				schedStr = formatLocal(*d.ScheduledDepartureUTC)
-			}
-			if d.EstimatedDepartureUTC != nil {
-				estStr = formatLocal(*d.EstimatedDepartureUTC)
-			}
-			if !when.IsZero() {
-				countdown = formatCountdown(when.Sub(now))
-			}
-
-			plat := "-"
-			if d.PlatformNumber != nil && *d.PlatformNumber != "" {
-				plat = *d.PlatformNumber
-			}
-
-			routeName := routeLabel(resp, d.RouteID)
-			towards := destinationFor(resp, d)
-
-			status := delayStatus(d, isEst)
-			t.Row(countdown, schedStr, estStr, plat, routeName, towards, status)
-		}
-		if err := t.Flush(); err != nil {
-			return err
-		}
-
-		// Surface any disruptions referenced by these departures.
-		if len(resp.Disruptions) > 0 {
-			printed := map[int64]bool{}
-			first := true
-			for _, d := range deps {
-				for _, id := range d.DisruptionIDs {
-					if printed[id] {
-						continue
-					}
-					if dis, ok := resp.Disruptions[strconv.FormatInt(id, 10)]; ok {
-						if first {
-							fmt.Println("\nDisruptions")
-							first = false
-						}
-						fmt.Printf("  • [%s] %s\n", render.CleanText(dis.DisruptionStatus), render.CleanText(dis.Title))
-						printed[id] = true
-					}
-				}
-			}
-		}
-		return nil
+		defer closeSources(sources)
+		return runNextGTFS(cmd.Context(), sources, joinArgs(args), modeHint)
 	},
 }
 
@@ -306,32 +198,42 @@ type nextOutput struct {
 	Disruptions map[string]disruptionOutput    `json:"disruptions"`
 	Status      nextStatusOutput               `json:"status"`
 	TimeZone    string                         `json:"time_zone"`
+	DataSource  string                         `json:"data_source,omitempty"`
+	Freshness   *freshnessOutput               `json:"freshness,omitempty"`
+	Warnings    []string                       `json:"warnings,omitempty"`
 }
 
 type nextDepartureOutput struct {
-	StopID                int     `json:"stop_id"`
-	PTVStopID             int     `json:"ptv_stop_id"`
-	RouteID               int     `json:"route_id"`
-	PTVRouteID            int     `json:"ptv_route_id"`
-	RunID                 int     `json:"run_id"`
-	RunRef                string  `json:"run_ref,omitempty"`
-	PTVRunRef             string  `json:"ptv_run_ref,omitempty"`
-	DirectionID           int     `json:"direction_id"`
-	PTVDirectionID        int     `json:"ptv_direction_id"`
-	DisruptionIDs         []int64 `json:"disruption_ids"`
-	PTVDisruptionIDs      []int64 `json:"ptv_disruption_ids"`
-	ScheduledDepartureUTC *string `json:"scheduled_departure_utc,omitempty"`
-	EstimatedDepartureUTC *string `json:"estimated_departure_utc,omitempty"`
-	ScheduledDeparture    *string `json:"scheduled_departure,omitempty"`
-	EstimatedDeparture    *string `json:"estimated_departure,omitempty"`
-	AtPlatform            bool    `json:"at_platform"`
-	PlatformNumber        *string `json:"platform_number"`
-	Flags                 string  `json:"flags,omitempty"`
-	DepartureSequence     int     `json:"departure_sequence"`
-	DepartureNote         *string `json:"departure_note,omitempty"`
-	RouteLabel            string  `json:"route_label,omitempty"`
-	Towards               string  `json:"towards,omitempty"`
-	ServiceStatus         string  `json:"service_status"`
+	StopID                int              `json:"stop_id"`
+	PTVStopID             int              `json:"ptv_stop_id"`
+	RouteID               int              `json:"route_id"`
+	PTVRouteID            int              `json:"ptv_route_id"`
+	RunID                 int              `json:"run_id"`
+	RunRef                string           `json:"run_ref,omitempty"`
+	PTVRunRef             string           `json:"ptv_run_ref,omitempty"`
+	DirectionID           int              `json:"direction_id"`
+	PTVDirectionID        int              `json:"ptv_direction_id"`
+	DisruptionIDs         []int64          `json:"disruption_ids"`
+	PTVDisruptionIDs      []int64          `json:"ptv_disruption_ids"`
+	ScheduledDepartureUTC *string          `json:"scheduled_departure_utc,omitempty"`
+	EstimatedDepartureUTC *string          `json:"estimated_departure_utc,omitempty"`
+	ScheduledDeparture    *string          `json:"scheduled_departure,omitempty"`
+	EstimatedDeparture    *string          `json:"estimated_departure,omitempty"`
+	AtPlatform            bool             `json:"at_platform"`
+	PlatformNumber        *string          `json:"platform_number"`
+	Flags                 string           `json:"flags,omitempty"`
+	DepartureSequence     int              `json:"departure_sequence"`
+	DepartureNote         *string          `json:"departure_note,omitempty"`
+	RouteLabel            string           `json:"route_label,omitempty"`
+	Towards               string           `json:"towards,omitempty"`
+	ServiceStatus         string           `json:"service_status"`
+	GTFSStopID            string           `json:"gtfs_stop_id,omitempty"`
+	GTFSRouteID           string           `json:"gtfs_route_id,omitempty"`
+	GTFSServiceDate       string           `json:"service_date,omitempty"`
+	TripID                string           `json:"trip_id,omitempty"`
+	DelaySeconds          *int32           `json:"delay_seconds,omitempty"`
+	ScheduleRelationship  string           `json:"schedule_relationship,omitempty"`
+	Freshness             *sourceFreshness `json:"freshness,omitempty"`
 }
 
 type nextStopOutput struct {
@@ -345,6 +247,7 @@ type nextStopOutput struct {
 	StopLandmark  string  `json:"stop_landmark,omitempty"`
 	StopDistance  float64 `json:"stop_distance,omitempty"`
 	StopSequence  int     `json:"stop_sequence"`
+	GTFSStopID    string  `json:"gtfs_stop_id,omitempty"`
 }
 
 type nextRouteOutput struct {

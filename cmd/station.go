@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/gtfs"
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 	"github.com/thesammykins/ptv_cli/internal/render"
 )
@@ -20,10 +21,11 @@ var stationCmd = &cobra.Command{
 	Long:  "Show stop details, routes and facilities. Metro and V/Line stations return the most detail.",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, _, err := loadClient()
+		sources, err := resolveSources(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer closeSources(sources)
 
 		var modeHint []int
 		if stationMode != "" {
@@ -33,24 +35,39 @@ var stationCmd = &cobra.Command{
 			}
 			modeHint = []int{rt}
 		}
+		if numericID, numericErr := strconv.Atoi(strings.TrimSpace(joinArgs(args))); numericErr == nil && numericID > 0 && len(modeHint) == 0 {
+			return fmt.Errorf("a numeric station id needs --mode (train, tram, bus, vline, nightbus)")
+		}
 
 		commandCtx := cmd.Context()
 		if commandCtx == nil {
 			commandCtx = context.Background()
 		}
-		stop, err := resolveStationStopContext(commandCtx, client, joinArgs(args), modeHint)
+		stop, err := resolveGTFSStop(commandCtx, sources.GTFSStore, joinArgs(args), gtfsFeedModes(modeHint))
+		if err != nil {
+			if numericID, numericErr := strconv.Atoi(strings.TrimSpace(joinArgs(args))); numericErr == nil && numericID > 0 && len(modeHint) == 1 && sources.V3Client != nil {
+				routeType := 0
+				if len(modeHint) == 1 {
+					routeType = modeHint[0]
+				}
+				if response, v3Err := sources.V3Client.StopDetails(commandCtx, numericID, routeType); v3Err == nil {
+					output := newStationOutput(response, &ptvapi.StopModel{StopID: numericID, RouteType: routeType})
+					output.DataSource = "ptv_api_v3"
+					output.Warnings = []string{"GTFS identity unavailable; using PTV API v3 station details"}
+					if flagJSON {
+						return printJSON(&output)
+					}
+					return renderStationOutput(output)
+				}
+			}
+			return err
+		}
+		detail, err := sources.GTFSStore.StopDetail(commandCtx, stop.StopID)
 		if err != nil {
 			return err
 		}
-		if stop.RouteType < 0 {
-			return fmt.Errorf("a numeric stop id needs --mode (train, tram, bus, vline, nightbus)")
-		}
-
-		resp, err := client.StopDetails(commandCtx, stop.StopID, stop.RouteType)
-		if err != nil {
-			return err
-		}
-		output := newStationOutput(resp, stop)
+		output := newGTFSStationOutput(commandCtx, sources.GTFSStore, detail)
+		mergeStationFacilitiesFromV3(commandCtx, sources, joinArgs(args), modeHint, stop, &output)
 		if flagJSON {
 			return printJSON(&output)
 		}
@@ -88,10 +105,14 @@ func resolveStationStopContext(ctx context.Context, client *ptvapi.Client, query
 // exposed by the current major release while adding the official nested Stop
 // Details data instead of leaking the upstream transport DTO.
 type stationOutput struct {
-	Stop        stationStopOutput                  `json:"stop"`
-	Disruptions map[string]stationDisruptionOutput `json:"disruptions"`
-	Status      stationStatusOutput                `json:"status"`
-	TimeZone    string                             `json:"time_zone"`
+	Stop         stationStopOutput                  `json:"stop"`
+	Disruptions  map[string]stationDisruptionOutput `json:"disruptions"`
+	Status       stationStatusOutput                `json:"status"`
+	TimeZone     string                             `json:"time_zone"`
+	DataSource   string                             `json:"data_source,omitempty"`
+	SourceNotice *sourceNoticeOutput                `json:"source_notice,omitempty"`
+	Freshness    *freshnessOutput                   `json:"freshness,omitempty"`
+	Warnings     []string                           `json:"warnings,omitempty"`
 }
 
 type stationStopOutput struct {
@@ -111,6 +132,12 @@ type stationStopOutput struct {
 	Routes             []stationRouteOutput        `json:"routes"`
 	DisruptionIDs      []int64                     `json:"disruption_ids,omitempty"`
 	PTVDisruptionIDs   []int64                     `json:"ptv_disruption_ids,omitempty"`
+	GTFSStopID         string                      `json:"gtfs_stop_id,omitempty"`
+	ParentStation      string                      `json:"parent_station,omitempty"`
+	LocationType       int                         `json:"location_type,omitempty"`
+	WheelchairBoarding int                         `json:"wheelchair_boarding,omitempty"`
+	Transfers          []gtfs.TransferResult       `json:"transfers,omitempty"`
+	Pathways           []gtfs.PathwayResult        `json:"pathways,omitempty"`
 }
 
 type stationLocationOutput struct {

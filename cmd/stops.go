@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/thesammykins/ptv_cli/internal/geocode"
+	"github.com/thesammykins/ptv_cli/internal/gtfs"
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 	"github.com/thesammykins/ptv_cli/internal/render"
 )
@@ -33,10 +33,12 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 '--' separator so it is not mistaken for a flag. Put any flags before '--'.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, cfg, err := loadClient()
+		sources, err := resolveSources(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer closeSources(sources)
+		cfg := sources.Runtime
 		lat, lng, err := parseLatLng(args[0])
 		attribution := ""
 		if err != nil {
@@ -63,18 +65,11 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 		if err != nil {
 			return err
 		}
-		resp, err := client.StopsNearLocation(cmd.Context(), lat, lng, routeTypes, flagLimit, stopsNearDistance())
+		nearby, err := sources.GTFSStore.NearbyStops(cmd.Context(), lat, lng, gtfsFeedModes(routeTypes), stopsNearDistance(), flagLimit)
 		if err != nil {
 			return err
 		}
-		sort.SliceStable(resp.Stops, func(i, j int) bool {
-			if resp.Stops[i].StopDistance != resp.Stops[j].StopDistance {
-				return resp.Stops[i].StopDistance < resp.Stops[j].StopDistance
-			}
-			return resp.Stops[i].StopID < resp.Stops[j].StopID
-		})
-		resp.Stops = limitStops(resp.Stops)
-		output := newStopsOutput(resp.Stops, resp.Status, attribution)
+		output := newGTFSStopsOutput(cmd.Context(), sources.GTFSStore, nearby, attribution)
 		if flagJSON {
 			return printJSON(output)
 		}
@@ -99,29 +94,37 @@ var stopsOnCmd = &cobra.Command{
 	Short: "List all stops on a route",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, _, err := loadClient()
+		sources, err := resolveSources(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer closeSources(sources)
 		routeTypes, err := modesToTypes(stopsOnModes)
 		if err != nil {
 			return err
 		}
-		route, err := resolveRouteWithTypesContext(cmd.Context(), client, joinArgs(args), routeTypes)
+		route, err := resolveGTFSRoute(cmd.Context(), sources.GTFSStore, joinArgs(args), gtfsFeedModes(routeTypes))
 		if err != nil {
 			return err
 		}
-		resp, err := client.StopsForRoute(cmd.Context(), route.RouteID, route.RouteType, nil)
+		stops, err := sources.GTFSStore.StopsOnRoute(cmd.Context(), route.RouteID, nil)
 		if err != nil {
 			return err
 		}
-		sortStopsBySequence(resp.Stops)
-		resp.Stops = limitStops(resp.Stops)
-		output := newStopsOutput(resp.Stops, resp.Status, "")
+		if flagLimit > 0 && len(stops) > flagLimit {
+			stops = stops[:flagLimit]
+		}
+		output := newGTFSStopsOutput(cmd.Context(), sources.GTFSStore, func() []gtfs.NearbyStopResult {
+			out := make([]gtfs.NearbyStopResult, len(stops))
+			for i, stop := range stops {
+				out[i] = gtfs.NearbyStopResult{StopResult: stop}
+			}
+			return out
+		}(), "")
 		if flagJSON {
 			return printJSON(output)
 		}
-		fmt.Printf("Stops on %s (%s)\n", render.CleanText(route.RouteName), routeTypeName(route.RouteType))
+		fmt.Printf("Stops on %s (%s)\n", render.CleanText(route.LongName), gtfsModeName(route.FeedMode))
 		t := render.NewTable("ID", "STOP", "SUBURB")
 		for _, s := range output.Stops {
 			t.Row(s.StopID, s.StopName, s.StopSuburb)
@@ -137,6 +140,9 @@ type stopsOutput struct {
 	Stops       []stopsStopOutput `json:"stops"`
 	Status      stopsStatusOutput `json:"status"`
 	Attribution string            `json:"attribution,omitempty"`
+	DataSource  string            `json:"data_source,omitempty"`
+	Freshness   *freshnessOutput  `json:"freshness,omitempty"`
+	Warnings    []string          `json:"warnings,omitempty"`
 }
 
 type stopsStopOutput struct {
@@ -150,6 +156,8 @@ type stopsStopOutput struct {
 	StopLandmark  string  `json:"stop_landmark,omitempty"`
 	StopDistance  float64 `json:"stop_distance,omitempty"`
 	StopSequence  int     `json:"stop_sequence,omitempty"`
+	GTFSStopID    string  `json:"gtfs_stop_id,omitempty"`
+	Mode          string  `json:"mode,omitempty"`
 }
 
 type stopsStatusOutput struct {
