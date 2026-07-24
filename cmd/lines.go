@@ -19,30 +19,32 @@ var linesCmd = &cobra.Command{
 	Use:   "lines",
 	Short: "List transport lines/routes",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, _, err := loadClient()
+		sources, err := resolveSources(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer closeSources(sources)
 		routeTypes, err := modesToTypes(linesModes)
 		if err != nil {
 			return err
 		}
 		if len(args) > 0 {
-			return runLineShow(cmd.Context(), client, joinArgs(args), routeTypes)
+			return runLineShowGTFS(cmd.Context(), sources.GTFSStore, joinArgs(args), gtfsFeedModes(routeTypes), sources.GTFSFreshness)
 		}
-		resp, err := client.Routes(cmd.Context(), routeTypes, "")
+		routes, err := sources.GTFSStore.RoutesByMode(cmd.Context(), gtfsFeedModes(routeTypes))
 		if err != nil {
 			return err
 		}
-		sortLineRoutes(resp.Routes)
-		resp.Routes = limitRoutes(resp.Routes)
-		output := newLinesListOutput(resp)
+		if flagLimit > 0 && len(routes) > flagLimit {
+			routes = routes[:flagLimit]
+		}
+		output := newGTFSLinesListOutput(cmd.Context(), sources.GTFSStore, routes, sources.GTFSFreshness)
 		if flagJSON {
 			return printJSON(output)
 		}
 		t := render.NewTable("ID", "NUMBER", "NAME", "MODE")
 		for _, r := range output.Routes {
-			t.Row(r.RouteID, r.RouteNumber, r.RouteName, routeTypeName(r.RouteType))
+			t.Row(r.GTFSRouteID, r.RouteNumber, r.RouteName, r.Mode)
 		}
 		if err := t.Flush(); err != nil {
 			return err
@@ -57,15 +59,16 @@ var linesShowCmd = &cobra.Command{
 	Short: "Show directions and stops for a line",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, _, err := loadClient()
+		sources, err := resolveSources(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer closeSources(sources)
 		routeTypes, err := modesToTypes(linesModes)
 		if err != nil {
 			return err
 		}
-		return runLineShow(cmd.Context(), client, joinArgs(args), routeTypes)
+		return runLineShowGTFS(cmd.Context(), sources.GTFSStore, joinArgs(args), gtfsFeedModes(routeTypes), sources.GTFSFreshness)
 	},
 }
 
@@ -137,15 +140,21 @@ func runLineShow(ctx context.Context, client *ptvapi.Client, query string, route
 // shape while ensuring the command, rather than the upstream client, owns the
 // JSON contract.
 type linesListOutput struct {
-	Routes []lineRouteOutput `json:"routes"`
-	Route  *lineRouteOutput  `json:"route"`
-	Status lineStatusOutput  `json:"status"`
+	Routes     []lineRouteOutput `json:"routes"`
+	Route      *lineRouteOutput  `json:"route"`
+	Status     lineStatusOutput  `json:"status"`
+	DataSource string            `json:"data_source,omitempty"`
+	Freshness  *freshnessOutput  `json:"freshness,omitempty"`
+	Warnings   []string          `json:"warnings,omitempty"`
 }
 
 type linesShowOutput struct {
 	Route      lineRouteOutput             `json:"route"`
 	Directions []lineDirectionOutput       `json:"directions"`
 	Stops      map[string][]lineStopOutput `json:"stops"`
+	DataSource string                      `json:"data_source,omitempty"`
+	Freshness  *freshnessOutput            `json:"freshness,omitempty"`
+	Warnings   []string                    `json:"warnings,omitempty"`
 }
 
 type lineRouteOutput struct {
@@ -155,6 +164,8 @@ type lineRouteOutput struct {
 	RouteName   string `json:"route_name"`
 	RouteNumber string `json:"route_number"`
 	RouteGTFSID string `json:"route_gtfs_id,omitempty"`
+	GTFSRouteID string `json:"gtfs_route_id,omitempty"`
+	Mode        string `json:"mode,omitempty"`
 }
 
 type lineDirectionOutput struct {
@@ -178,6 +189,7 @@ type lineStopOutput struct {
 	StopLandmark  string  `json:"stop_landmark,omitempty"`
 	StopDistance  float64 `json:"stop_distance,omitempty"`
 	StopSequence  int     `json:"stop_sequence"`
+	GTFSStopID    string  `json:"gtfs_stop_id,omitempty"`
 }
 
 type lineStatusOutput struct {

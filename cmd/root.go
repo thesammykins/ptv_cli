@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	flagJSON  bool
-	flagLimit int
-	flagEnv   string
+	flagJSON          bool
+	flagLimit         int
+	flagEnv           string
+	flagNoUpdateCheck bool
 )
 
 // Build metadata, overridable via -ldflags at release time.
@@ -88,6 +89,7 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.PersistentFlags().BoolVar(&flagNoUpdateCheck, "no-update-check", false, "skip the live GTFS upstream update check")
 	rootCmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "output normalized JSON")
 	rootCmd.PersistentFlags().IntVar(&flagLimit, "limit", 0, "limit number of displayed results (0 = API default)")
 	rootCmd.PersistentFlags().StringVar(&flagEnv, "env-file", "", "explicit dotenv file to load (not read by default)")

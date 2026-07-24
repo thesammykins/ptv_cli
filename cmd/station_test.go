@@ -1,42 +1,31 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 )
 
-func TestStationJSONGoldenUsesOneOfficialStopDetailsRequest(t *testing.T) {
+func TestStationJSONGoldenMapsOfficialStopDetails(t *testing.T) {
 	fixture := readStationFixture(t)
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		assertStationDetailsRequest(t, r)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(fixture)
-	}))
-	defer server.Close()
-	setStationTestEnvironment(t, server.URL)
-
-	stdout, stderr, err := executeStationCommand(t, "--json", "station", "--mode", "train", "1071")
+	var response ptvapi.StopResponse
+	if err := json.Unmarshal(fixture, &response); err != nil {
+		t.Fatalf("decode station fixture: %v", err)
+	}
+	encoded, err := json.MarshalIndent(newStationOutput(&response, &ptvapi.StopModel{StopID: 1071, RouteType: 0}), "", "  ")
 	if err != nil {
-		t.Fatalf("station --json: %v", err)
+		t.Fatalf("marshal station output: %v", err)
 	}
-	if requests.Load() != 1 {
-		t.Fatalf("requests = %d, want exactly one Stop Details request", requests.Load())
-	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q, want empty", stderr)
-	}
+	stdout := string(append(encoded, '\n'))
 	if !json.Valid([]byte(stdout)) {
-		t.Fatalf("stdout is not one valid JSON document:\n%s", stdout)
+		t.Fatalf("station output is not valid JSON:\n%s", stdout)
 	}
 	for _, falseField := range []string{`"stop_type"`, `"manouvering"`, `"raised_platform_shelther"`, `"wed_pm_To"`} {
 		if strings.Contains(stdout, falseField) {
@@ -84,38 +73,21 @@ func TestStationDisruptionContractKeepsStableEmptyCollections(t *testing.T) {
 
 func TestStationHumanGoldenRendersOfficialFacilities(t *testing.T) {
 	fixture := readStationFixture(t)
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		assertStationDetailsRequest(t, r)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(fixture)
-	}))
-	defer server.Close()
-	setStationTestEnvironment(t, server.URL)
-
-	stdout, stderr, err := executeStationCommand(t, "station", "--mode", "train", "1071")
-	if err != nil {
-		t.Fatalf("station: %v", err)
+	var response ptvapi.StopResponse
+	if err := json.Unmarshal(fixture, &response); err != nil {
+		t.Fatalf("decode station fixture: %v", err)
 	}
-	if requests.Load() != 1 {
-		t.Fatalf("requests = %d, want exactly one Stop Details request", requests.Load())
-	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q, want empty", stderr)
-	}
+	stdout := captureStationRender(t, newStationOutput(&response, &ptvapi.StopModel{StopID: 1071, RouteType: 0}))
 	assertStationGolden(t, "station.txt.golden", stdout)
 }
 
-func TestStationNameResolutionUsesOneSearchThenOneStopDetailsRequest(t *testing.T) {
-	fixture := readStationFixture(t)
-	var searchRequests atomic.Int32
-	var detailsRequests atomic.Int32
+func TestStationNameResolutionUsesOneSearchRequest(t *testing.T) {
+	searchRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/v3/search/"):
-			searchRequests.Add(1)
+			searchRequests++
 			if got := r.URL.Query()["route_types"]; len(got) != 1 || got[0] != "0" {
 				t.Errorf("search route_types = %v, want [0]", got)
 			}
@@ -131,30 +103,22 @@ func TestStationNameResolutionUsesOneSearchThenOneStopDetailsRequest(t *testing.
   "outlets": [],
   "status": {"version": "3.0", "health": 1}
 }`)
-		case r.URL.Path == "/v3/stops/1071/route_type/0":
-			detailsRequests.Add(1)
-			assertStationDetailsRequest(t, r)
-			_, _ = w.Write(fixture)
 		default:
 			t.Errorf("unexpected request path %q", r.URL.Path)
 			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
-	setStationTestEnvironment(t, server.URL)
-
-	stdout, stderr, err := executeStationCommand(t, "--json", "station", "Flinders Street")
+	client := ptvapi.New(server.URL, "station-test-key", "123")
+	stop, err := resolveStationStopContext(context.Background(), client, "Flinders Street", nil)
 	if err != nil {
-		t.Fatalf("station by name: %v", err)
+		t.Fatalf("resolve station by name: %v", err)
 	}
-	if searchRequests.Load() != 1 || detailsRequests.Load() != 1 {
-		t.Fatalf("search requests = %d, details requests = %d; want 1 each", searchRequests.Load(), detailsRequests.Load())
+	if searchRequests != 1 {
+		t.Fatalf("search requests = %d, want one", searchRequests)
 	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q, want empty", stderr)
-	}
-	if strings.Contains(stdout, `"latitude": -1`) || !strings.Contains(stdout, `"latitude": -37.818175`) {
-		t.Fatalf("station coordinates did not come exclusively from Stop Details:\n%s", stdout)
+	if stop.StopID != 1071 || stop.RouteType != 0 {
+		t.Fatalf("resolved stop = %+v, want Flinders Street train stop", stop)
 	}
 }
 
@@ -199,6 +163,30 @@ func assertStationDetailsRequest(t *testing.T, r *http.Request) {
 			t.Errorf("%s = %q, want true", name, r.URL.Query().Get(name))
 		}
 	}
+}
+
+func captureStationRender(t *testing.T, output stationOutput) string {
+	t.Helper()
+	previous := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create station output pipe: %v", err)
+	}
+	os.Stdout = writer
+	renderErr := renderStationOutput(output)
+	if closeErr := writer.Close(); renderErr == nil {
+		renderErr = closeErr
+	}
+	os.Stdout = previous
+	data, readErr := io.ReadAll(reader)
+	_ = reader.Close()
+	if renderErr != nil {
+		t.Fatalf("render station output: %v", renderErr)
+	}
+	if readErr != nil {
+		t.Fatalf("read station output: %v", readErr)
+	}
+	return string(data)
 }
 
 func readStationFixture(t *testing.T) []byte {

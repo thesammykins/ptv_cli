@@ -1,10 +1,14 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/gtfs"
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 	"github.com/thesammykins/ptv_cli/internal/render"
 )
@@ -16,10 +20,11 @@ var searchCmd = &cobra.Command{
 	Short: "Search stops, routes and outlets",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, _, err := loadClient()
+		sources, err := resolveSources(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer closeSources(sources)
 		term := joinArgs(args)
 
 		routeTypes, err := modesToTypes(searchModes)
@@ -27,13 +32,53 @@ var searchCmd = &cobra.Command{
 			return err
 		}
 
-		resp, err := client.Search(cmd.Context(), term, routeTypes)
+		stops, err := sources.GTFSStore.StopSearch(cmd.Context(), term, gtfsFeedModes(routeTypes), 0)
 		if err != nil {
 			return err
 		}
-		sortSearchResult(resp)
-		limitSearchResult(resp)
-		output := newSearchOutput(resp)
+		routes, err := sources.GTFSStore.RoutesByMode(cmd.Context(), gtfsFeedModes(routeTypes))
+		if err != nil {
+			return err
+		}
+		termLower := strings.ToLower(term)
+		filtered := routes[:0]
+		for _, route := range routes {
+			if strings.Contains(strings.ToLower(route.ShortName), termLower) || strings.Contains(strings.ToLower(route.LongName), termLower) || strings.Contains(strings.ToLower(route.RouteID), termLower) {
+				filtered = append(filtered, route)
+			}
+		}
+		output := newGTFSsearchOutput(cmd.Context(), sources.GTFSStore, stops, filtered, sources.GTFSFreshness)
+		if sources.V3Client != nil {
+			if enrichment, enrichmentErr := sources.V3Client.Search(cmd.Context(), term, routeTypes); enrichmentErr == nil {
+				for _, outlet := range enrichment.Outlets {
+					output.Outlets = append(output.Outlets, searchOutletOutput{OutletName: normalizedText(outlet.OutletName), OutletBusiness: normalizedText(outlet.OutletBusiness), OutletLatitude: outlet.OutletLatitude, OutletLongitude: outlet.OutletLongitude, OutletSuburb: normalizedText(outlet.OutletSuburb), OutletDistance: outlet.OutletDistance})
+				}
+				if len(enrichment.Outlets) > 0 {
+					output.DataSource = "gtfs_static+v3_outlets"
+					fmt.Fprintln(os.Stderr, "merged outlet results from PTV API")
+				}
+			} else {
+				output.Warnings = append(output.Warnings, "PTV outlet enrichment unavailable")
+				if sources.V3Static != nil {
+					for _, outlet := range sources.V3Static.SearchOutlets(term, flagLimit) {
+						output.Outlets = append(output.Outlets, searchOutletOutput{OutletName: outlet.OutletName, OutletBusiness: outlet.OutletBusiness, OutletLatitude: outlet.OutletLatitude, OutletLongitude: outlet.OutletLongitude, OutletSuburb: outlet.OutletSuburb})
+					}
+					if len(output.Outlets) > 0 {
+						output.DataSource = "gtfs_static+v3_static_outlets"
+						output.SourceNotice = v3StaticNotice()
+					}
+				}
+			}
+		} else if sources.V3Static != nil {
+			for _, outlet := range sources.V3Static.SearchOutlets(term, flagLimit) {
+				output.Outlets = append(output.Outlets, searchOutletOutput{OutletName: outlet.OutletName, OutletBusiness: outlet.OutletBusiness, OutletLatitude: outlet.OutletLatitude, OutletLongitude: outlet.OutletLongitude, OutletSuburb: outlet.OutletSuburb})
+			}
+			if len(output.Outlets) > 0 {
+				output.DataSource = "gtfs_static+v3_static_outlets"
+				output.SourceNotice = v3StaticNotice()
+			}
+		}
+		limitGTFSsearchOutput(&output)
 		if flagJSON {
 			return printJSON(output)
 		}
@@ -42,7 +87,7 @@ var searchCmd = &cobra.Command{
 			fmt.Println("Stops")
 			t := render.NewTable("ID", "NAME", "SUBURB", "MODE")
 			for _, s := range output.Stops {
-				t.Row(s.StopID, s.StopName, s.StopSuburb, routeTypeName(s.RouteType))
+				t.Row(s.GTFSStopID, s.StopName, s.StopSuburb, s.Mode)
 			}
 			if err := t.Flush(); err != nil {
 				return err
@@ -53,7 +98,7 @@ var searchCmd = &cobra.Command{
 			fmt.Println("Routes")
 			t := render.NewTable("ID", "NUMBER", "NAME", "MODE")
 			for _, r := range output.Routes {
-				t.Row(r.RouteID, r.RouteNumber, r.RouteName, routeTypeName(r.RouteType))
+				t.Row(r.GTFSRouteID, r.RouteNumber, r.RouteName, r.Mode)
 			}
 			if err := t.Flush(); err != nil {
 				return err
@@ -77,11 +122,38 @@ var searchCmd = &cobra.Command{
 	},
 }
 
+func limitGTFSsearchOutput(output *searchOutput) {
+	if output == nil || flagLimit <= 0 {
+		return
+	}
+	remaining := flagLimit
+	if len(output.Stops) > remaining {
+		output.Stops = output.Stops[:remaining]
+		output.Routes = output.Routes[:0]
+		output.Outlets = output.Outlets[:0]
+		return
+	}
+	remaining -= len(output.Stops)
+	if len(output.Routes) > remaining {
+		output.Routes = output.Routes[:remaining]
+		output.Outlets = output.Outlets[:0]
+		return
+	}
+	remaining -= len(output.Routes)
+	if len(output.Outlets) > remaining {
+		output.Outlets = output.Outlets[:remaining]
+	}
+}
+
 type searchOutput struct {
-	Stops   []searchStopOutput   `json:"stops"`
-	Routes  []searchRouteOutput  `json:"routes"`
-	Outlets []searchOutletOutput `json:"outlets"`
-	Status  searchStatusOutput   `json:"status"`
+	Stops        []searchStopOutput   `json:"stops"`
+	Routes       []searchRouteOutput  `json:"routes"`
+	Outlets      []searchOutletOutput `json:"outlets"`
+	Status       searchStatusOutput   `json:"status"`
+	DataSource   string               `json:"data_source,omitempty"`
+	SourceNotice *sourceNoticeOutput  `json:"source_notice,omitempty"`
+	Freshness    *freshnessOutput     `json:"freshness,omitempty"`
+	Warnings     []string             `json:"warnings,omitempty"`
 }
 
 type searchStopOutput struct {
@@ -95,6 +167,8 @@ type searchStopOutput struct {
 	StopLandmark  string  `json:"stop_landmark,omitempty"`
 	StopDistance  float64 `json:"stop_distance,omitempty"`
 	StopSequence  int     `json:"stop_sequence,omitempty"`
+	GTFSStopID    string  `json:"gtfs_stop_id,omitempty"`
+	Mode          string  `json:"mode,omitempty"`
 }
 
 type searchRouteOutput struct {
@@ -104,6 +178,23 @@ type searchRouteOutput struct {
 	RouteName   string `json:"route_name"`
 	RouteNumber string `json:"route_number"`
 	RouteGTFSID string `json:"route_gtfs_id,omitempty"`
+	GTFSRouteID string `json:"gtfs_route_id,omitempty"`
+	Mode        string `json:"mode,omitempty"`
+}
+
+func newGTFSsearchOutput(ctx context.Context, store *gtfs.Store, stops []gtfs.StopResult, routes []gtfs.RouteResult, reports ...*gtfs.FreshnessReport) searchOutput {
+	freshness := currentGTFSFreshness(ctx, store, reports...)
+	output := searchOutput{
+		Stops: make([]searchStopOutput, 0, len(stops)), Routes: make([]searchRouteOutput, 0, len(routes)), Outlets: []searchOutletOutput{},
+		DataSource: "gtfs_static", Freshness: &freshness, Warnings: []string{},
+	}
+	for _, stop := range stops {
+		output.Stops = append(output.Stops, searchStopOutput{StopName: stop.StopName, StopLatitude: stop.StopLat, StopLongitude: stop.StopLon, GTFSStopID: stop.StopID, Mode: gtfsModeName(stop.FeedMode)})
+	}
+	for _, route := range routes {
+		output.Routes = append(output.Routes, searchRouteOutput{RouteName: route.LongName, RouteNumber: route.ShortName, RouteGTFSID: route.RouteID, GTFSRouteID: route.RouteID, RouteType: feedToAPIType(route.FeedMode), Mode: gtfsModeName(route.FeedMode)})
+	}
+	return output
 }
 
 // searchOutletOutput intentionally omits outlet_slid_spid: it is an

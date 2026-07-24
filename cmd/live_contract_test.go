@@ -6,15 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/thesammykins/ptv_cli/internal/gtfs"
 	"github.com/thesammykins/ptv_cli/internal/ptvapi"
 )
 
@@ -213,56 +211,36 @@ func TestFareOutletAndModeMappers(t *testing.T) {
 	}
 }
 
-func TestSearchCommandJSONIsOneDocumentAndLimitsAfterSorting(t *testing.T) {
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		if !strings.HasPrefix(r.URL.Path, "/v3/search/") {
-			t.Errorf("request path = %q", r.URL.Path)
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{
-  "stops": [
-    {"stop_id": 3, "stop_name": "Zulu", "stop_suburb": "C", "route_type": 0},
-    {"stop_id": 1, "stop_name": "Alpha", "stop_suburb": "A", "route_type": 0},
-    {"stop_id": 2, "stop_name": "Bravo", "stop_suburb": "B", "route_type": 0}
-  ],
-  "routes": [{"route_id": 8, "route_name": "Hidden by global cap", "route_type": 0}],
-  "outlets": [],
-  "status": {"version": "3.0", "health": 1}
-}`)
-	}))
-	defer server.Close()
-
-	t.Setenv("PTV_API_KEY", "contract-test-key")
-	t.Setenv("PTV_API_USERID", "123")
-	t.Setenv("PTV_BASE_URL", server.URL)
-	searchModes = nil
-	rootCmd.SetContext(context.Background())
-	stdout, stderr, err := executeLiveContractCommand(t, "--json", "--limit", "2", "search", "term")
+func TestGTFSsearchOutputPreservesNormalizedCollections(t *testing.T) {
+	output := newGTFSsearchOutput(context.Background(), nil, []gtfs.StopResult{
+		{StopID: "2:1", StopName: "Alpha", FeedMode: 2},
+		{StopID: "2:2", StopName: "Bravo", FeedMode: 2},
+	}, nil)
+	encoded, err := json.Marshal(output)
 	if err != nil {
-		t.Fatalf("search command: %v", err)
-	}
-	if requests.Load() != 1 {
-		t.Fatalf("requests = %d, want 1", requests.Load())
-	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q, want empty", stderr)
-	}
-	if !json.Valid([]byte(stdout)) {
-		t.Fatalf("stdout is not one JSON document:\n%s", stdout)
-	}
-	var output searchOutput
-	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
 		t.Fatal(err)
 	}
-	if len(output.Stops) != 2 || output.Stops[0].StopName != "Alpha" || output.Stops[1].StopName != "Bravo" {
-		t.Fatalf("limited stops = %+v", output.Stops)
+	if !json.Valid(encoded) || len(output.Stops) != 2 || output.Stops[0].StopName != "Alpha" || output.Stops[1].GTFSStopID != "2:2" {
+		t.Fatalf("GTFS search output = %s", encoded)
 	}
-	if len(output.Routes) != 0 || output.Routes == nil || output.Outlets == nil {
-		t.Fatalf("global cap must retain empty arrays: routes=%#v outlets=%#v", output.Routes, output.Outlets)
+	if output.Routes == nil || output.Outlets == nil {
+		t.Fatalf("GTFS search output must retain empty collections: %+v", output)
+	}
+}
+
+func TestLimitGTFSsearchOutputCapsCombinedCollections(t *testing.T) {
+	previousLimit := flagLimit
+	t.Cleanup(func() { flagLimit = previousLimit })
+	flagLimit = 3
+	output := searchOutput{
+		Stops:   []searchStopOutput{{}, {}},
+		Routes:  []searchRouteOutput{{}, {}},
+		Outlets: []searchOutletOutput{{}, {}},
+	}
+
+	limitGTFSsearchOutput(&output)
+	if len(output.Stops) != 2 || len(output.Routes) != 1 || len(output.Outlets) != 0 {
+		t.Fatalf("limited search output = stops:%d routes:%d outlets:%d, want 2/1/0", len(output.Stops), len(output.Routes), len(output.Outlets))
 	}
 }
 
@@ -281,8 +259,8 @@ func TestSearchCommandPropagatesCommandContext(t *testing.T) {
 	searchCmd.SetContext(requestContext)
 	searchModes, flagEnv = nil, ""
 	err := searchCmd.RunE(searchCmd, []string{"term"})
-	if !errors.Is(err, context.Canceled) || !ptvapi.IsKind(err, ptvapi.ErrorCanceled) {
-		t.Fatalf("search error = %v, want typed command cancellation", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("search error = %v, want command cancellation", err)
 	}
 }
 

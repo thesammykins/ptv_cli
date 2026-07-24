@@ -22,15 +22,16 @@ var disruptionsCmd = &cobra.Command{
 	Short: "View current and planned service disruptions",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, _, err := loadClient()
+		sources, err := resolveSources(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer closeSources(sources)
 		routeTypes, terr := modesToTypes(disruptionsModes)
 		if terr != nil {
 			return terr
 		}
-		return runDisruptions(cmd.Context(), client, routeTypes, disruptionsRoute)
+		return runDisruptionsGTFS(cmd.Context(), sources, routeTypes, disruptionsRoute)
 	},
 }
 
@@ -88,11 +89,14 @@ type disruptionsOutput struct {
 	Disruptions map[string][]disruptionOutput `json:"disruptions"`
 	Status      disruptionStatusOutput        `json:"status"`
 	TimeZone    string                        `json:"time_zone"`
+	DataSource  string                        `json:"data_source,omitempty"`
+	Freshness   *freshnessOutput              `json:"freshness,omitempty"`
+	Warnings    []string                      `json:"warnings,omitempty"`
 }
 
 type disruptionOutput struct {
-	DisruptionID     int64                   `json:"disruption_id"`
-	PTVDisruptionID  int64                   `json:"ptv_disruption_id"`
+	DisruptionID     int64                   `json:"disruption_id,omitempty"`
+	PTVDisruptionID  int64                   `json:"ptv_disruption_id,omitempty"`
 	Title            string                  `json:"title"`
 	URL              string                  `json:"url,omitempty"`
 	Description      string                  `json:"description,omitempty"`
@@ -104,6 +108,12 @@ type disruptionOutput struct {
 	ToDate           *string                 `json:"to_date,omitempty"`
 	Routes           []disruptionRouteOutput `json:"routes"`
 	Stops            []disruptionStopOutput  `json:"stops"`
+	ID               string                  `json:"id,omitempty"`
+	Source           string                  `json:"source,omitempty"`
+	Cause            *string                 `json:"cause,omitempty"`
+	Effect           *string                 `json:"effect,omitempty"`
+	GTFSRouteID      string                  `json:"gtfs_route_id,omitempty"`
+	GTFSStopID       string                  `json:"gtfs_stop_id,omitempty"`
 }
 
 type disruptionRouteOutput struct {
@@ -113,6 +123,7 @@ type disruptionRouteOutput struct {
 	RouteName   string                     `json:"route_name"`
 	RouteNumber string                     `json:"route_number"`
 	Direction   *disruptionDirectionOutput `json:"direction,omitempty"`
+	RouteGTFSID string                     `json:"gtfs_route_id,omitempty"`
 }
 
 type disruptionDirectionOutput struct {
@@ -122,10 +133,11 @@ type disruptionDirectionOutput struct {
 }
 
 type disruptionStopOutput struct {
-	RouteType int    `json:"route_type"`
-	StopID    int    `json:"stop_id"`
-	PTVStopID int    `json:"ptv_stop_id"`
-	StopName  string `json:"stop_name"`
+	RouteType  int    `json:"route_type"`
+	StopID     int    `json:"stop_id"`
+	PTVStopID  int    `json:"ptv_stop_id"`
+	StopName   string `json:"stop_name"`
+	GTFSStopID string `json:"gtfs_stop_id,omitempty"`
 }
 
 type disruptionStatusOutput struct {

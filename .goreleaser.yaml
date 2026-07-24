@@ -33,6 +33,9 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
+    files:
+      - NOTICE
+      - docs/releases/*.md
 
 checksum:
   name_template: "checksums.txt"

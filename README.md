@@ -1,5 +1,8 @@
 # ptv — Victorian public transport from your terminal
 
+`ptv` is an independent project and is not affiliated with or endorsed by
+Public Transport Victoria.
+
 `ptv` is a command-line companion for Victorian public transport. It combines
 the **PTV Timetable API v3** (real-time departures, disruptions, line and
 station information) with the **PTV GTFS static feed** (multi-modal journey
@@ -93,6 +96,14 @@ does not transmit it. Without the subscription key, the core PTV
 Timetable API features still work; commands that can use GTFS Realtime data will
 print a warning and skip that enrichment.
 
+The CLI also ships a reviewed, normalized snapshot of selected low-volatility
+PTV Timetable API v3 enrichment data, limited to outlet records and explicitly
+seeded station facilities. It never supplies static route or direction data:
+live v3 or local GTFS remains authoritative for route topology, schedules and
+journey planning, while GTFS-Realtime remains authoritative for live state.
+See [the snapshot workflow](docs/ptv-v3-snapshot.md) for regeneration,
+attribution, and the monthly update process.
+
 Store them securely in the OS keyring:
 
 ```sh
@@ -112,24 +123,47 @@ ptv auth opendata check    # makes a GTFS Realtime test request
 ptv auth opendata logout   # removes stored Open Data credentials
 ```
 
-### Which live API should I use?
+### What works without a v3 API key?
 
-The PTV Timetable API v3 remains the main source for stop/route lookup,
-departures, runs, disruptions and local journey context. Transport Victoria
-Open Data GTFS Realtime is separate and is often **better for live vehicle
-identity and position** because its vehicle-position feeds cover train, tram,
-bus and V/Line directly and frequently expose vehicle IDs/labels that v3 omits.
+The v3 key is optional for the local timetable and planner. After `ptv gtfs
+update`, the CLI can search, inspect lines/stops/stations, show scheduled
+departures, calculate fares, and plan journeys entirely from the versioned GTFS
+static database. It does not silently replace that authoritative route topology
+or timetable with a partial API response.
 
-Current CLI wiring:
+The separate Transport Victoria Open Data key can add real-time data without a
+v3 key. These credentials are independent: an Open Data key does not unlock v3
+platforms or v3 endpoint data, and a v3 key does not unlock GTFS-Realtime feeds.
+
+| Capability | No v3 key | v3 key configured |
+| --- | --- | --- |
+| Stops, routes, lines, timetable/trip queries and `ptv plan` | Local GTFS static data; available after `ptv gtfs update` | Same GTFS source, with optional v3 enrichment where supported |
+| Search and outlets | GTFS stops/routes plus the reviewed low-volatility outlet snapshot | GTFS stops/routes plus live v3 outlet results when available |
+| Station details | GTFS station/parent-platform semantics plus seeded snapshot facilities when matched | Live v3 facilities and route/platform enrichment, with static fallback |
+| `ptv next` | Scheduled GTFS departures; with an Open Data key, GTFS-R delays, estimates and skips can be applied | Same, plus best-effort v3 platform/run/disruption enrichment |
+| `ptv disruptions` | Open Data service alerts for the catalogued train/tram feeds when that key is configured; otherwise an explicit unavailable result | Open Data alerts plus v3 bus/V/Line enrichment and v3 route filtering when available |
+| `ptv vehicle` | GTFS-R vehicle positions for train, tram, bus and V/Line when the Open Data key is configured; otherwise no live vehicle feed | Adds v3 stop/run/descriptor context where PTV exposes it |
+| Journey disruption overlay | No v3 overlay; the local journey still works and reports the skipped overlay | Best-effort v3 disruption overlay on the local journey |
+
+Without either credential set, the CLI remains useful but is schedule-only for
+live-sensitive commands: `next` labels the result as scheduled, `vehicle`
+cannot query live vehicle feeds, and `disruptions` reports that live alerts are
+unavailable. Static snapshot data is supplementary metadata only; it does not
+contain live route topology, current departures, current platforms, or a
+replacement for the GTFS timetable.
+
+Current live-source wiring:
 
 - `ptv vehicle` uses GTFS-R vehicle-position feeds for all four mode groups when
   Open Data credentials are configured, and can find vehicles even when v3 has no
   `vehicle_descriptor`.
+- `ptv next` uses GTFS-R trip updates for estimates/delays/skips when the
+  matching Open Data feed is available, then falls back to scheduled GTFS times.
+- `ptv disruptions` merges Open Data service alerts and optional v3 enrichment;
+  `ptv plan` remains locally planned and only its optional disruption overlay
+  uses v3 today.
 - `ptv gtfs realtime` lists and inspects the official GTFS-R trip update,
   service alert and vehicle-position feeds for debugging or scripting.
-- `ptv next`, `ptv plan` and `ptv disruptions` still use the Timetable API v3
-  and local static GTFS today; GTFS-R trip updates and service alerts are exposed
-  for inspection but are not yet merged into those commands.
 
 > The signature scheme is HMAC-SHA1 over `"{path}?{query-incl-devid}"`, keyed
 > by the API key; the uppercase-hex result is appended as `&signature=`.
@@ -202,10 +236,11 @@ ptv --env-file .env gtfs realtime bus-vehicle-positions --json
 ptv --env-file .env gtfs realtime --all
 ```
 
-The command reports feed timestamps and entity counts. `ptv vehicle` already
-uses the vehicle-position feeds; trip updates and service alerts are currently
-available through this inspection command for debugging/scripting and are not yet
-merged into `ptv next`, `ptv plan` or `ptv disruptions`.
+The command reports feed timestamps and entity counts. `ptv vehicle` uses the
+vehicle-position feeds, and `ptv next`/`ptv disruptions` consume the applicable
+GTFS-R trip-update/service-alert feeds when their Open Data key is configured.
+`ptv plan` remains a local GTFS calculation; its optional live disruption
+overlay is supplied by the v3 API rather than GTFS-R.
 
 ## Usage
 

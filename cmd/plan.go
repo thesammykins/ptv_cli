@@ -27,7 +27,6 @@ var (
 	planRadius           float64
 	planNoGeocode        bool
 	planNoDisruptions    bool
-	planNoUpdateCheck    bool
 	planAllowConditional bool
 )
 
@@ -222,7 +221,7 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 		// therefore never add serial timeout windows after routing completes.
 		optionalCtx := cmd.Context()
 		cancelOptional := func() {}
-		if !planNoUpdateCheck || !planNoDisruptions {
+		if !flagNoUpdateCheck || !planNoDisruptions {
 			optionalCtx, cancelOptional = context.WithTimeout(cmd.Context(), planOptionalNetworkBudget)
 		}
 		defer cancelOptional()
@@ -256,7 +255,7 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 		}
 
 		var freshnessResult <-chan planFreshnessResult
-		if !planNoUpdateCheck {
+		if !flagNoUpdateCheck {
 			state, stateErr := store.DatasetState(cmd.Context())
 			if stateErr != nil {
 				progress.Stop()
@@ -789,7 +788,6 @@ func init() {
 	planCmd.Flags().Float64Var(&planRadius, "radius", 1000, "search radius in metres for a lat,lng or geocoded place")
 	planCmd.Flags().BoolVar(&planNoGeocode, "no-geocode", false, "disable place/address geocoding (match local stop names only)")
 	planCmd.Flags().BoolVar(&planNoDisruptions, "no-disruptions", false, "skip the real-time disruptions overlay")
-	planCmd.Flags().BoolVar(&planNoUpdateCheck, "no-update-check", false, "skip the GTFS staleness / upstream-update check")
 	planCmd.Flags().BoolVar(&planAllowConditional, "allow-conditional", false, "allow pickup/drop-off that requires advance arrangement or driver coordination")
 	rootCmd.AddCommand(planCmd)
 }

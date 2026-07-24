@@ -107,14 +107,14 @@ type outerFeed struct {
 }
 
 type feedCompileStats struct {
-	stops                  int64
-	routes                 int64
-	services               int64
-	trips                  int64
-	stopTimes              int64
-	connections            int64
-	duplicateTrips         int64
-	nonIncreasingSegments  int64
+	stops                 int64
+	routes                int64
+	services              int64
+	trips                 int64
+	stopTimes             int64
+	connections           int64
+	duplicateTrips        int64
+	nonIncreasingSegments int64
 }
 
 func compileArchive(ctx context.Context, store *Store, zipPath string, progress func(string)) (ServiceCoverage, error) {
