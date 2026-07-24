@@ -75,7 +75,7 @@ Note: a coordinate beginning with '-' (Melbourne latitudes do) must follow a
 		}
 		t := render.NewTable("ID", "STOP", "SUBURB", "MODE", "DIST(m)")
 		for _, s := range output.Stops {
-			t.Row(s.StopID, s.StopName, s.StopSuburb, routeTypeName(s.RouteType), fmt.Sprintf("%.0f", s.StopDistance))
+			t.Row(s.GTFSStopID, s.StopName, s.StopSuburb, routeTypeName(s.RouteType), fmt.Sprintf("%.0f", s.StopDistance))
 		}
 		if err := t.Flush(); err != nil {
 			return err
@@ -127,7 +127,7 @@ var stopsOnCmd = &cobra.Command{
 		fmt.Printf("Stops on %s (%s)\n", render.CleanText(route.LongName), gtfsModeName(route.FeedMode))
 		t := render.NewTable("ID", "STOP", "SUBURB")
 		for _, s := range output.Stops {
-			t.Row(s.StopID, s.StopName, s.StopSuburb)
+			t.Row(s.GTFSStopID, s.StopName, s.StopSuburb)
 		}
 		if err := t.Flush(); err != nil {
 			return err

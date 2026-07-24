@@ -107,12 +107,6 @@ var gtfsUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		update, err := manager.AcquireUpdate(cmd.Context())
-		if err != nil {
-			return err
-		}
-		defer update.Release()
-
 		if gtfsBackgroundWorker {
 			startedAt := time.Now().UTC().Format(time.RFC3339)
 			_ = gtfs.WriteUpdateProgress(cfg.DataDir, gtfs.UpdateProgress{State: "downloading", StartedAt: startedAt})
@@ -124,6 +118,11 @@ var gtfsUpdateCmd = &cobra.Command{
 				}
 			}()
 		}
+		update, err := manager.AcquireUpdate(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer update.Release()
 		if !flagJSON && !gtfsBackgroundWorker {
 			fmt.Printf("Downloading GTFS feed from %s\n", render.CleanText(gtfs.RedactSourceURL(cfg.GTFSURL)))
 			fmt.Println("(this is a large file, ~200MB; please wait)")
