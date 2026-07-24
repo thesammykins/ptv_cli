@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/thesammykins/ptv_cli/internal/atomicfile"
 )
 
 type AutoUpdateConfig struct {
@@ -67,9 +69,20 @@ func CheckAndAutoUpdate(ctx context.Context, cfg AutoUpdateConfig) (*Store, Auto
 	if report.State != FreshnessChanged && !(report.State == FreshnessStale && report.UpdateAvailable) {
 		return store, AutoUpdateResult{State: "current", Freshness: &report}, nil
 	}
+	claim, claimErr := manager.AcquireUpdate(ctx)
+	if claimErr != nil {
+		if errors.Is(claimErr, ErrUpdateInProgress) {
+			return store, AutoUpdateResult{Background: true, State: "updating", Message: "GTFS update already in progress; results may be stale until next invocation", Freshness: &report}, nil
+		}
+		return store, AutoUpdateResult{State: "failed", Message: "GTFS update claim could not be acquired", Freshness: &report}, nil
+	}
 	if err := startUpdateWorker(cfg); err != nil {
+		_ = claim.Release()
 		return store, AutoUpdateResult{State: "failed", Message: "GTFS background update could not be started", Freshness: &report}, nil
 	}
+	// The worker acquires its own lease before downloading. Release the parent
+	// launch claim only after the child process has been started.
+	_ = claim.Release()
 	return store, AutoUpdateResult{Triggered: true, Background: true, State: "updating", Message: "updating GTFS data in background; results may be stale until next invocation", Freshness: &report}, nil
 }
 
@@ -106,12 +119,7 @@ func WriteUpdateProgress(dataDir string, progress UpdateProgress) error {
 	if err != nil {
 		return err
 	}
-	tmp := UpdateProgressPath(dataDir) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, UpdateProgressPath(dataDir)); err != nil {
-		_ = os.Remove(tmp)
+	if err := atomicfile.WriteFile(UpdateProgressPath(dataDir), data, 0o600); err != nil {
 		return fmt.Errorf("publishing update progress: %w", err)
 	}
 	return nil

@@ -27,4 +27,20 @@ func TestWriteUpdateProgressPublishesOneAtomicRecord(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDir, ".update.progress.json.tmp")); !os.IsNotExist(err) {
 		t.Fatalf("temporary progress file still exists: %v", err)
 	}
+
+	replacement := UpdateProgress{State: "completed", Percent: 100, CompletedAt: "2026-07-24T01:05:03Z", GenerationID: "generation-2"}
+	if err := WriteUpdateProgress(dataDir, replacement); err != nil {
+		t.Fatalf("WriteUpdateProgress() replacement error = %v", err)
+	}
+	contents, err = os.ReadFile(UpdateProgressPath(dataDir))
+	if err != nil {
+		t.Fatalf("ReadFile() replacement error = %v", err)
+	}
+	got = UpdateProgress{}
+	if err := json.Unmarshal(contents, &got); err != nil {
+		t.Fatalf("replacement progress JSON = %q: %v", contents, err)
+	}
+	if got != replacement {
+		t.Fatalf("replacement progress = %+v, want %+v", got, replacement)
+	}
 }

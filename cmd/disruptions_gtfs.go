@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -60,6 +61,7 @@ func runDisruptionsGTFS(ctx context.Context, sources *resolvedSources, routeType
 			output.Warnings = append(output.Warnings, "PTV v3 disruption enrichment unavailable")
 		}
 	}
+	output.Disruptions = limitDisruptionOutputMap(output.Disruptions)
 	if flagJSON {
 		return printJSON(output)
 	}
@@ -77,6 +79,34 @@ func runDisruptionsGTFS(ctx context.Context, sources *resolvedSources, routeType
 		}
 	}
 	return nil
+}
+
+func limitDisruptionOutputMap(items map[string][]disruptionOutput) map[string][]disruptionOutput {
+	if flagLimit <= 0 {
+		return items
+	}
+	out := make(map[string][]disruptionOutput, len(items))
+	remaining := flagLimit
+	modes := make([]string, 0, len(items))
+	for mode := range items {
+		modes = append(modes, mode)
+	}
+	sort.Strings(modes)
+	for _, mode := range modes {
+		itemsForMode := items[mode]
+		if remaining <= 0 {
+			out[mode] = []disruptionOutput{}
+			continue
+		}
+		if len(itemsForMode) > remaining {
+			out[mode] = itemsForMode[:remaining]
+			remaining = 0
+			continue
+		}
+		out[mode] = itemsForMode
+		remaining -= len(itemsForMode)
+	}
+	return out
 }
 
 func fetchV3Disruptions(ctx context.Context, client *ptvapi.Client, routeTypes []int, routeQuery string) (*ptvapi.DisruptionsResponse, error) {
@@ -114,9 +144,11 @@ func appendV3Disruptions(output *disruptionsOutput, response *ptvapi.Disruptions
 	allowedTypes := requestedV3DisruptionTypes(routeTypes)
 	appended := 0
 	for mode, items := range response.Disruptions {
-		if !v3DisruptionModeAllowed(mode, allowedTypes) {
+		routeType, ok := v3DisruptionModeAllowed(mode, allowedTypes)
+		if !ok {
 			continue
 		}
+		bucket := routeTypeName(routeType)
 		for _, disruption := range items {
 			item := newDisruptionOutput(disruption)
 			if routeQuery != "" && !disruptionMatchesRoute(item, routeQuery) {
@@ -124,14 +156,14 @@ func appendV3Disruptions(output *disruptionsOutput, response *ptvapi.Disruptions
 			}
 			item.ID = fmt.Sprintf("v3:%d", disruption.DisruptionID)
 			item.Source = "v3"
-			output.Disruptions[mode] = append(output.Disruptions[mode], item)
+			output.Disruptions[bucket] = append(output.Disruptions[bucket], item)
 			appended++
 		}
 	}
 	return appended
 }
 
-func v3DisruptionModeAllowed(mode string, routeTypes []int) bool {
+func v3DisruptionModeAllowed(mode string, routeTypes []int) (int, bool) {
 	mode = strings.ToLower(strings.NewReplacer("/", "", "_", "", "-", "", " ", "").Replace(mode))
 	var routeType int
 	switch {
@@ -140,14 +172,14 @@ func v3DisruptionModeAllowed(mode string, routeTypes []int) bool {
 	case strings.Contains(mode, "bus"):
 		routeType = 2
 	default:
-		return false
+		return 0, false
 	}
 	for _, allowed := range routeTypes {
 		if allowed == routeType {
-			return true
+			return routeType, true
 		}
 	}
-	return false
+	return 0, false
 }
 
 func disruptionMatchesRoute(item disruptionOutput, query string) bool {
