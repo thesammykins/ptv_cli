@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "generated_at": "2026-07-24T04:14:50Z",
+  "generated_at": "2026-09-01T18:29:13Z",
   "source": "ptv_timetable_api_v3",
   "attribution": "Source: Licensed from Public Transport Victoria under a Creative Commons Attribution 4.0 International Licence.",
   "license": "https://creativecommons.org/licenses/by/4.0/",
@@ -8,7 +8,7 @@
   "modification": "This bundled snapshot is a normalized, selected subset of PTV Timetable API data and may be out of date.",
   "disclaimer": "The PTV Timetable API Data is provided as is. Use of this data is your responsibility; determine whether it is suitable for your purposes.",
   "non_endorsement": "ptv is an independent project and is not affiliated with or endorsed by Public Transport Victoria.",
-  "content_sha256": "cc609c9571c474476323c0eec97480f77dbd7f5e056e140a0c2933643025c717",
+  "content_sha256": "393db260eea10c353553836f1c8c8c1da5e20e3b96f3e019ce5d6ad019d3eaa4",
   "outlets": [
     {
       "outlet_name": "1 Gheringhap Street",
@@ -139,15 +139,15 @@
     {
       "outlet_name": "124 Millers Road",
       "outlet_business": "Altona Gate Lucky Lotto",
-      "outlet_latitude": -37.82791,
-      "outlet_longitude": 144.847229,
+      "outlet_latitude": -37.8279,
+      "outlet_longitude": 144.8472,
       "outlet_suburb": "Altona North"
     },
     {
       "outlet_name": "124 Millers Road",
       "outlet_business": "Altona Gate Lucky Lotto",
-      "outlet_latitude": -37.8279,
-      "outlet_longitude": 144.8472,
+      "outlet_latitude": -37.82791,
+      "outlet_longitude": 144.847229,
       "outlet_suburb": "Altona North"
     },
     {
@@ -156,6 +156,13 @@
       "outlet_latitude": -37.8495,
       "outlet_longitude": 144.8447,
       "outlet_suburb": "Altona North"
+    },
+    {
+      "outlet_name": "Station Street",
+      "outlet_business": "Ararat Station",
+      "outlet_latitude": -37.2822,
+      "outlet_longitude": 142.9369,
+      "outlet_suburb": "Ararat"
     },
     {
       "outlet_name": "Forrest Street",
@@ -282,6 +289,13 @@
       "outlet_latitude": -37.8154,
       "outlet_longitude": 145.0411,
       "outlet_suburb": "Auburn"
+    },
+    {
+      "outlet_name": "80 Beach Road",
+      "outlet_business": "Skylounge Cafe",
+      "outlet_latitude": -38.02642,
+      "outlet_longitude": 144.47316,
+      "outlet_suburb": "Avalon"
     },
     {
       "outlet_name": "138 Main Street",
@@ -837,6 +851,13 @@
       "outlet_suburb": "Brunswick East"
     },
     {
+      "outlet_name": "160-164 Melville Road",
+      "outlet_business": "Albion Pharmacy",
+      "outlet_latitude": -37.75867,
+      "outlet_longitude": 144.944977,
+      "outlet_suburb": "Brunswick West"
+    },
+    {
       "outlet_name": "27-31 Melville Road",
       "outlet_business": "7-Eleven West Brunswick",
       "outlet_latitude": -37.7659,
@@ -1047,6 +1068,13 @@
       "outlet_suburb": "Campbellfield"
     },
     {
+      "outlet_name": "Longmore Street",
+      "outlet_business": "Camperdown Station",
+      "outlet_latitude": -38.2289,
+      "outlet_longitude": 143.150925,
+      "outlet_suburb": "Camperdown"
+    },
+    {
       "outlet_name": "104 Maling Rd",
       "outlet_business": "Canterbury Newsagency",
       "outlet_latitude": -37.8247,
@@ -1247,13 +1275,6 @@
       "outlet_business": "7-Eleven Chadstone",
       "outlet_latitude": -37.877,
       "outlet_longitude": 145.0861,
-      "outlet_suburb": "Chadstone"
-    },
-    {
-      "outlet_name": "Shop G111, 1341 Dandenong Road",
-      "outlet_business": "Nextra Chadstone",
-      "outlet_latitude": -37.88655,
-      "outlet_longitude": 145.084747,
       "outlet_suburb": "Chadstone"
     },
     {
@@ -1488,6 +1509,13 @@
       "outlet_suburb": "Colac"
     },
     {
+      "outlet_name": "Gellibrand Street",
+      "outlet_business": "Colac Station",
+      "outlet_latitude": -38.34338,
+      "outlet_longitude": 143.586655,
+      "outlet_suburb": "Colac"
+    },
+    {
       "outlet_name": "330 Smith St",
       "outlet_business": "Golden Dollar Lotto",
       "outlet_latitude": -37.7993,
@@ -1591,6 +1619,13 @@
       "outlet_latitude": -38.0995,
       "outlet_longitude": 145.2806,
       "outlet_suburb": "Cranbourne"
+    },
+    {
+      "outlet_name": "Cnr Rocherster Blvd and Linsell Pde",
+      "outlet_business": "7-Eleven Cranbourne East",
+      "outlet_latitude": -38.0995,
+      "outlet_longitude": 145.296326,
+      "outlet_suburb": "Cranbourne East"
     },
     {
       "outlet_name": "945 South Gippsland Highway",
@@ -1705,13 +1740,6 @@
       "outlet_suburb": "Dandenong North"
     },
     {
-      "outlet_name": "46 Brady Road",
-      "outlet_business": "Cignall Brady Road",
-      "outlet_latitude": -37.9543,
-      "outlet_longitude": 145.2127,
-      "outlet_suburb": "Dandenong North"
-    },
-    {
       "outlet_name": "2 Hartnett Way",
       "outlet_business": "7-Eleven Dandenong South",
       "outlet_latitude": -38.0046,
@@ -1766,6 +1794,13 @@
       "outlet_latitude": -37.627,
       "outlet_longitude": 144.7199,
       "outlet_suburb": "Diggers Rest"
+    },
+    {
+      "outlet_name": "18 Mack Street",
+      "outlet_business": "Dingee General Store",
+      "outlet_latitude": -36.36872,
+      "outlet_longitude": 144.232147,
+      "outlet_suburb": "Dingee"
     },
     {
       "outlet_name": "277-283 Centre Dandenong Road",
@@ -1842,13 +1877,6 @@
       "outlet_business": "The Pines LPO",
       "outlet_latitude": -37.7618,
       "outlet_longitude": 145.1687,
-      "outlet_suburb": "Doncaster East"
-    },
-    {
-      "outlet_name": "262 Blackburn Road",
-      "outlet_business": "Donburn Milk Bar",
-      "outlet_latitude": -37.7824,
-      "outlet_longitude": 145.1637,
       "outlet_suburb": "Doncaster East"
     },
     {
@@ -1978,6 +2006,13 @@
       "outlet_suburb": "East Ringwood"
     },
     {
+      "outlet_name": "Darling Street",
+      "outlet_business": "Echuca Station",
+      "outlet_latitude": -36.13104,
+      "outlet_longitude": 144.753342,
+      "outlet_suburb": "Echuca"
+    },
+    {
       "outlet_name": "242 Nepean Highway",
       "outlet_business": "Edithvale News Tatts \u0026 Post",
       "outlet_latitude": -38.03685,
@@ -1990,6 +2025,20 @@
       "outlet_latitude": -38.0381,
       "outlet_longitude": 145.1085,
       "outlet_suburb": "Edithvale"
+    },
+    {
+      "outlet_name": "65 Railway Road",
+      "outlet_business": "Elmore Post Office",
+      "outlet_latitude": -36.49428,
+      "outlet_longitude": 144.608215,
+      "outlet_suburb": "Elmore"
+    },
+    {
+      "outlet_name": "3/242 Glen Huntly Rd",
+      "outlet_business": "7-Eleven Elsternwick Station",
+      "outlet_latitude": -37.88442,
+      "outlet_longitude": 145.000244,
+      "outlet_suburb": "Elsternwick"
     },
     {
       "outlet_name": "444 Glenhuntly Road",
@@ -2504,7 +2553,7 @@
     },
     {
       "outlet_name": "1626 High Street",
-      "outlet_business": "Posteah Express",
+      "outlet_business": "Glen Iris LPO",
       "outlet_latitude": -37.8602,
       "outlet_longitude": 145.0581,
       "outlet_suburb": "Glen Iris"
@@ -2620,6 +2669,13 @@
       "outlet_latitude": -37.704,
       "outlet_longitude": 145.1082,
       "outlet_suburb": "Greensborough"
+    },
+    {
+      "outlet_name": "680A Somerton Rd",
+      "outlet_business": "7-Eleven Greenvale",
+      "outlet_latitude": -37.63543,
+      "outlet_longitude": 144.888184,
+      "outlet_suburb": "Greenvale"
     },
     {
       "outlet_name": "Cnr Bonds Lane \u0026 Mickleham Rd",
@@ -3070,13 +3126,6 @@
       "outlet_suburb": "Keysborough"
     },
     {
-      "outlet_name": "511 Cheltenham Road",
-      "outlet_business": "7-Eleven Keysborough",
-      "outlet_latitude": -37.9909,
-      "outlet_longitude": 145.1493,
-      "outlet_suburb": "Keysborough"
-    },
-    {
       "outlet_name": "41 Sydney Street",
       "outlet_business": "Kilmore Newsagency",
       "outlet_latitude": -37.2928,
@@ -3420,6 +3469,13 @@
       "outlet_suburb": "Marshall"
     },
     {
+      "outlet_name": "27 Station Street",
+      "outlet_business": "Maryborough Station",
+      "outlet_latitude": -37.05091,
+      "outlet_longitude": 143.7424,
+      "outlet_suburb": "Maryborough"
+    },
+    {
       "outlet_name": "211 Tucker Road",
       "outlet_business": "7-Eleven McKinnon",
       "outlet_latitude": -37.9125,
@@ -3483,20 +3539,6 @@
       "outlet_suburb": "Melbourne"
     },
     {
-      "outlet_name": "205 Queen Street",
-      "outlet_business": "Cignall Queen St",
-      "outlet_latitude": -37.8139,
-      "outlet_longitude": 144.96,
-      "outlet_suburb": "Melbourne"
-    },
-    {
-      "outlet_name": "228 Queen Street",
-      "outlet_business": "7-Eleven 228 Queen Street",
-      "outlet_latitude": -37.8132,
-      "outlet_longitude": 144.9601,
-      "outlet_suburb": "Melbourne"
-    },
-    {
       "outlet_name": "237 Exhibition Street",
       "outlet_business": "7-Eleven 237 Exhibition Street",
       "outlet_latitude": -37.8103,
@@ -3504,24 +3546,10 @@
       "outlet_suburb": "Melbourne"
     },
     {
-      "outlet_name": "255 William Street",
-      "outlet_business": "Flagstaff News and Lotto",
-      "outlet_latitude": -37.8132,
-      "outlet_longitude": 144.9568,
-      "outlet_suburb": "Melbourne"
-    },
-    {
       "outlet_name": "26 King Street",
       "outlet_business": "7-Eleven 26 King Street",
       "outlet_latitude": -37.8195,
       "outlet_longitude": 144.9575,
-      "outlet_suburb": "Melbourne"
-    },
-    {
-      "outlet_name": "261 William Street",
-      "outlet_business": "7-Eleven William St",
-      "outlet_latitude": -37.813,
-      "outlet_longitude": 144.9566,
       "outlet_suburb": "Melbourne"
     },
     {
@@ -3672,7 +3700,7 @@
       "outlet_suburb": "Melbourne"
     },
     {
-      "outlet_name": "Spencer Stret",
+      "outlet_name": "Spencer Street",
       "outlet_business": "PTV Hub Southern Cross",
       "outlet_latitude": -37.81832,
       "outlet_longitude": 144.953445,
@@ -3716,13 +3744,6 @@
     {
       "outlet_name": "Arrival Drive",
       "outlet_business": "Melbourne Airport",
-      "outlet_latitude": -37.6705,
-      "outlet_longitude": 144.8493,
-      "outlet_suburb": "Melbourne Airport"
-    },
-    {
-      "outlet_name": "Arrival Drive",
-      "outlet_business": "Melbourne Airport",
       "outlet_latitude": -37.6749,
       "outlet_longitude": 144.8498,
       "outlet_suburb": "Melbourne Airport"
@@ -3730,8 +3751,22 @@
     {
       "outlet_name": "Arrival Drive",
       "outlet_business": "Melbourne Airport",
+      "outlet_latitude": -37.6705,
+      "outlet_longitude": 144.8493,
+      "outlet_suburb": "Melbourne Airport"
+    },
+    {
+      "outlet_name": "Arrival Drive",
+      "outlet_business": "Melbourne Airport",
       "outlet_latitude": -37.6694,
       "outlet_longitude": 144.8522,
+      "outlet_suburb": "Melbourne Airport"
+    },
+    {
+      "outlet_name": "Ground Floor - Terminal 2, Arrival Drive",
+      "outlet_business": "The Tourism Group",
+      "outlet_latitude": -37.66887,
+      "outlet_longitude": 144.848236,
       "outlet_suburb": "Melbourne Airport"
     },
     {
@@ -3954,15 +3989,15 @@
     {
       "outlet_name": "St Kilda Road",
       "outlet_business": "Swanston St Flinders St Fed Sq",
-      "outlet_latitude": -37.8181,
-      "outlet_longitude": 144.9677,
+      "outlet_latitude": -37.8185,
+      "outlet_longitude": 144.968,
       "outlet_suburb": "Melbourne City"
     },
     {
       "outlet_name": "St Kilda Road",
       "outlet_business": "Swanston St Flinders St Fed Sq",
-      "outlet_latitude": -37.8185,
-      "outlet_longitude": 144.968,
+      "outlet_latitude": -37.8181,
+      "outlet_longitude": 144.9677,
       "outlet_suburb": "Melbourne City"
     },
     {
@@ -4258,13 +4293,6 @@
       "outlet_latitude": -38.2367,
       "outlet_longitude": 146.3968,
       "outlet_suburb": "Morwell"
-    },
-    {
-      "outlet_name": "85 Mount Eliza way",
-      "outlet_business": "Mt Eliza Newsagency",
-      "outlet_latitude": -38.1846,
-      "outlet_longitude": 145.0887,
-      "outlet_suburb": "Mount Eliza"
     },
     {
       "outlet_name": "12 Station Street",
@@ -4708,13 +4736,6 @@
       "outlet_suburb": "Parkville"
     },
     {
-      "outlet_name": "50 Flemington Rd",
-      "outlet_business": "Wood Pharmacy",
-      "outlet_latitude": -37.7953,
-      "outlet_longitude": 144.95,
-      "outlet_suburb": "Parkville"
-    },
-    {
       "outlet_name": "Barry Street",
       "outlet_business": "7-Eleven Parkville",
       "outlet_latitude": -37.80158,
@@ -4930,6 +4951,13 @@
       "outlet_latitude": -37.7785,
       "outlet_longitude": 144.9705,
       "outlet_suburb": "Princes Hill"
+    },
+    {
+      "outlet_name": "12-14 Kelly Street",
+      "outlet_business": "Pyramid Hill News \u0026 Post",
+      "outlet_latitude": -36.05444,
+      "outlet_longitude": 144.115219,
+      "outlet_suburb": "Pyramid Hill"
     },
     {
       "outlet_name": "Christies Road",
@@ -5338,6 +5366,13 @@
       "outlet_suburb": "Seymour"
     },
     {
+      "outlet_name": "Purcell Street",
+      "outlet_business": "Shepparton Station",
+      "outlet_latitude": -36.38381,
+      "outlet_longitude": 145.405975,
+      "outlet_suburb": "Shepparton"
+    },
+    {
       "outlet_name": "315 Glenelg Highway",
       "outlet_business": "7-Eleven Delacombe",
       "outlet_latitude": -37.5907,
@@ -5508,15 +5543,15 @@
     {
       "outlet_name": "Clarendon Street",
       "outlet_business": "Clarendon St Exhibition and Ca",
-      "outlet_latitude": -37.8233,
-      "outlet_longitude": 144.9561,
+      "outlet_latitude": -37.8236,
+      "outlet_longitude": 144.9563,
       "outlet_suburb": "Southbank"
     },
     {
       "outlet_name": "Clarendon Street",
       "outlet_business": "Clarendon St Exhibition and Ca",
-      "outlet_latitude": -37.8236,
-      "outlet_longitude": 144.9563,
+      "outlet_latitude": -37.8233,
+      "outlet_longitude": 144.9561,
       "outlet_suburb": "Southbank"
     },
     {
@@ -5539,6 +5574,13 @@
       "outlet_latitude": -37.8218,
       "outlet_longitude": 144.9695,
       "outlet_suburb": "Southbank"
+    },
+    {
+      "outlet_name": "72 Hudsons Road",
+      "outlet_business": "IGA Spotswood",
+      "outlet_latitude": -37.82942,
+      "outlet_longitude": 144.885681,
+      "outlet_suburb": "Spotswood"
     },
     {
       "outlet_name": "Hall Street",
@@ -5819,6 +5861,13 @@
       "outlet_latitude": -37.8243,
       "outlet_longitude": 145.0887,
       "outlet_suburb": "Surrey Hills"
+    },
+    {
+      "outlet_name": "Curlewis Street",
+      "outlet_business": "Swan Hill Station",
+      "outlet_latitude": -35.34111,
+      "outlet_longitude": 143.562347,
+      "outlet_suburb": "Swan Hill"
     },
     {
       "outlet_name": "Watergardens Circuit Road",
@@ -6171,13 +6220,6 @@
       "outlet_suburb": "Wantirna South"
     },
     {
-      "outlet_name": "43 Victoria St",
-      "outlet_business": "Warragul Newsagency",
-      "outlet_latitude": -38.1614,
-      "outlet_longitude": 145.9301,
-      "outlet_suburb": "Warragul"
-    },
-    {
       "outlet_name": "Alfred Street",
       "outlet_business": "Warragul Station",
       "outlet_latitude": -38.1652,
@@ -6190,6 +6232,13 @@
       "outlet_latitude": -37.7472,
       "outlet_longitude": 145.2064,
       "outlet_suburb": "Warrandyte"
+    },
+    {
+      "outlet_name": "Merri Street",
+      "outlet_business": "Warrnambool Station",
+      "outlet_latitude": -38.38502,
+      "outlet_longitude": 142.475555,
+      "outlet_suburb": "Warrnambool"
     },
     {
       "outlet_name": "45-49 Watsonia Road",
@@ -6374,6 +6423,13 @@
       "outlet_suburb": "Williamstown North"
     },
     {
+      "outlet_name": "Railway Street",
+      "outlet_business": "Winchelsea Station",
+      "outlet_latitude": -38.24013,
+      "outlet_longitude": 143.984146,
+      "outlet_suburb": "Winchelsea"
+    },
+    {
       "outlet_name": "259 Dandenong Road",
       "outlet_business": "7-Eleven Windsor",
       "outlet_latitude": -37.8588,
@@ -6386,6 +6442,13 @@
       "outlet_latitude": -37.8561,
       "outlet_longitude": 144.992,
       "outlet_suburb": "Windsor"
+    },
+    {
+      "outlet_name": "2A Linfield Pde",
+      "outlet_business": "7-Eleven Wollert",
+      "outlet_latitude": -37.61556,
+      "outlet_longitude": 145.029358,
+      "outlet_suburb": "Wollert"
     },
     {
       "outlet_name": "31 Murray Street",
